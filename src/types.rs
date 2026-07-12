@@ -1,11 +1,26 @@
 use base64::prelude::*;
 use schemars::{JsonSchema, Schema, schema_for, schema_for_value};
-use std::{fmt::Debug, fs, io, str::FromStr};
+#[cfg(feature = "fs")]
+use std::fs;
+#[cfg(feature = "fs")]
+use std::path::PathBuf;
+use std::{
+    fmt::{Debug, Display},
+    io,
+    str::FromStr,
+};
 
 use erased_serde::Serialize as ErasedSerialize;
 use serde::{Deserialize, Serialize};
 
-use crate::errors::UnsupportedType;
+use crate::errors::{InvalidInput, UnsupportedType};
+
+pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
+pub const CHAT_COMPLETIONS_ENDPOINT: &str = "/chat/completions";
+pub const MESSAGES_ENDPOINT: &str = "/messages";
+pub const ALLOWED_AUDIO_TYPES: &[&str] = &["audio/wav", "audio/mp3"];
+pub const ALLOWED_IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -43,6 +58,17 @@ pub enum MessagePartType {
     Audio,
 }
 
+impl ToString for MessagePartType {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Text => "text".to_string(),
+            Self::Image => "image".to_string(),
+            Self::Audio => "audio".to_string(),
+            Self::Thinking => "thinking".to_string(),
+        }
+    }
+}
+
 impl FromStr for MessagePartType {
     type Err = UnsupportedType;
 
@@ -59,52 +85,73 @@ impl FromStr for MessagePartType {
     }
 }
 
-pub trait MessagePart {
-    fn part_type(&self) -> MessagePartType;
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextPart {
     pub text: String,
 }
 
-impl MessagePart for TextPart {
-    fn part_type(&self) -> MessagePartType {
-        MessagePartType::Text
-    }
-}
-
 impl TextPart {
-    pub fn new(text: String) -> Self {
-        Self { text }
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingPart {
+    pub thinking: String,
+}
+
+impl ThinkingPart {
+    pub fn new(thinking: impl Into<String>) -> Self {
+        Self {
+            thinking: thinking.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImagePart {
     pub data: String,
     pub is_base64: bool,
     pub mime_type: Option<String>,
 }
 
-impl MessagePart for ImagePart {
-    fn part_type(&self) -> MessagePartType {
-        MessagePartType::Image
-    }
-}
-
 impl ImagePart {
-    pub fn new(data: String, mime_type: String) -> Self {
-        Self {
-            data,
-            is_base64: true,
-            mime_type: Some(mime_type),
+    pub fn new(
+        data: impl Into<String>,
+        mime_type: impl Into<String>,
+    ) -> Result<Self, InvalidInput> {
+        let media_type = mime_type.into();
+        if !ALLOWED_IMAGE_TYPES.contains(&media_type.as_str()) {
+            return Err(InvalidInput {
+                reason: format!(
+                    "Unsupported image type: {}. The supported image types are: {}",
+                    media_type,
+                    ALLOWED_IMAGE_TYPES.join(", ")
+                ),
+            });
         }
+        Ok(Self {
+            data: data.into(),
+            is_base64: true,
+            mime_type: Some(media_type),
+        })
     }
 
+    #[cfg(feature = "fs")]
     pub fn try_from_file(file: String) -> Result<Self, io::Error> {
         let content = fs::read(file)?;
         let kind = file_format::FileFormat::from_bytes(&content);
+        if !ALLOWED_IMAGE_TYPES.contains(&kind.media_type()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Unsupported image type: {}. The supported image types are: {}",
+                    kind.media_type(),
+                    ALLOWED_IMAGE_TYPES.join(", ")
+                ),
+            ));
+        }
         let b64 = BASE64_STANDARD.encode(content);
         Ok(Self {
             data: b64,
@@ -122,26 +169,65 @@ impl ImagePart {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioPart {
-    data: String,
-    mime_type: String,
-}
-
-impl MessagePart for AudioPart {
-    fn part_type(&self) -> MessagePartType {
-        MessagePartType::Audio
-    }
+    pub data: String,
+    pub mime_type: String,
 }
 
 impl AudioPart {
-    pub fn new(data: String, mime_type: String) -> Self {
-        Self { data, mime_type }
+    pub fn new(
+        data: impl Into<String>,
+        mime_type: impl Into<String>,
+    ) -> Result<Self, InvalidInput> {
+        let media_type = mime_type.into();
+        if !ALLOWED_AUDIO_TYPES.contains(&media_type.as_str()) {
+            return Err(InvalidInput {
+                reason: format!(
+                    "Unsupported audio type: {}. The supported audio types are: {}",
+                    media_type,
+                    ALLOWED_AUDIO_TYPES.join(", ")
+                ),
+            });
+        }
+        Ok(Self {
+            data: data.into(),
+            mime_type: media_type,
+        })
     }
 
-    pub fn try_from_file(file: String) -> Result<Self, io::Error> {
-        let content = fs::read(file)?;
+    pub fn try_from_bytes(data: Vec<u8>) -> Result<Self, InvalidInput> {
+        let kind = file_format::FileFormat::from_bytes(&data);
+        if !ALLOWED_AUDIO_TYPES.contains(&&kind.media_type()) {
+            return Err(InvalidInput {
+                reason: format!(
+                    "Unsupported audio type: {}. The supported audio types are: {}",
+                    kind.media_type(),
+                    ALLOWED_AUDIO_TYPES.join(", ")
+                ),
+            });
+        }
+        let b64 = BASE64_STANDARD.encode(data);
+        Ok(Self {
+            data: b64,
+            mime_type: kind.media_type().to_owned(),
+        })
+    }
+
+    #[cfg(feature = "fs")]
+    pub fn try_from_file(file: impl Into<PathBuf>) -> Result<Self, io::Error> {
+        let content = fs::read(file.into())?;
         let kind = file_format::FileFormat::from_bytes(&content);
+        if !ALLOWED_AUDIO_TYPES.contains(&kind.media_type()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Unsupported audio type: {}. The supported audio types are: {}",
+                    kind.media_type(),
+                    ALLOWED_AUDIO_TYPES.join(", ")
+                ),
+            ));
+        }
         let b64 = BASE64_STANDARD.encode(content);
         Ok(Self {
             data: b64,
@@ -150,9 +236,19 @@ impl AudioPart {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+#[non_exhaustive]
+pub enum MessagePart {
+    Text(TextPart),
+    Image(ImagePart),
+    Audio(AudioPart),
+    Thinking(ThinkingPart),
+}
+
 pub trait Message: Debug + ErasedSerialize {
     fn role(&self) -> MessageRole;
-    fn content(&self) -> Vec<Box<dyn MessagePart>>;
+    fn content(&self) -> Vec<MessagePart>;
 }
 
 erased_serde::serialize_trait_object!(Message);
@@ -174,6 +270,15 @@ impl FromStr for ApiType {
             _ => Err(UnsupportedType {
                 unsupported_type: s.to_owned(),
             }),
+        }
+    }
+}
+
+impl Display for ApiType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OpenAI => write!(f, "openai"),
+            Self::Anthropic => write!(f, "anthropic"),
         }
     }
 }
@@ -223,7 +328,22 @@ impl Default for ToolChoice {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl FromStr for ToolChoice {
+    type Err = UnsupportedType;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "auto" => Ok(Self::Auto),
+            "required" => Ok(Self::Required),
+            _ => Err(UnsupportedType {
+                unsupported_type: s.to_owned(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Tool {
     pub name: String,
     pub description: String,
@@ -315,23 +435,124 @@ impl LLMRequestBuilder {
         self
     }
 
-    pub fn base_url(mut self, base_url: String) -> Self {
-        self.base_url = Some(base_url);
+    pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
         self
     }
 
-    pub fn api_key(mut self, api_key: String) -> Self {
-        self.api_key = api_key;
+    pub fn api_key(mut self, api_key: impl Into<String>) -> Self {
+        self.api_key = api_key.into();
         self
     }
 
     #[must_use]
-    pub fn model(mut self, model: String) -> Self {
-        self.model = model;
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
         self
     }
 
-    // To be continued...
+    pub fn max_output_tokens(mut self, max_output_tokens: u32) -> Self {
+        self.max_output_tokens = Some(max_output_tokens);
+        self
+    }
+
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    pub fn top_p(mut self, top_p: f32) -> Self {
+        self.top_p = Some(top_p);
+        self
+    }
+
+    pub fn add_tool(mut self, tool: Tool) -> Self {
+        self.tools.get_or_insert_with(Vec::new).push(tool);
+        self
+    }
+
+    pub fn messages(mut self, messages: Vec<Box<dyn Message>>) -> Self {
+        self.messages = messages;
+        self
+    }
+
+    pub fn tool_choice(mut self, tool_choice: ToolChoice) -> Self {
+        self.tool_choice = Some(tool_choice);
+        self
+    }
+
+    pub fn stream(mut self, stream: bool) -> Self {
+        self.stream = stream;
+        self
+    }
+
+    pub fn parallel_tool_calls(mut self, parallel_tool_calls: bool) -> Self {
+        self.parallel_tool_calls = parallel_tool_calls;
+        self
+    }
+
+    pub fn reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = reasoning_effort;
+        self
+    }
+
+    pub fn output_format<T: JsonSchema>(mut self) -> Self {
+        self.output_format = Some(schema_for!(T));
+        self
+    }
+
+    pub fn output_format_from_schema(mut self, schema: Schema) -> Self {
+        self.output_format = Some(schema);
+        self
+    }
+
+    pub fn output_format_from_value(mut self, value: impl Serialize) -> Self {
+        self.output_format = Some(schema_for_value!(value));
+        self
+    }
+
+    pub fn prompt_cache_ttl(mut self, ttl: impl Into<String>) -> Self {
+        self.prompt_cache_ttl = Some(ttl.into());
+        self
+    }
+
+    fn get_base_url(&self) -> String {
+        if let Some(url) = &self.base_url {
+            url.to_owned()
+        } else {
+            match self.api_type {
+                ApiType::Anthropic => DEFAULT_ANTHROPIC_BASE_URL.to_owned(),
+                ApiType::OpenAI => DEFAULT_OPENAI_BASE_URL.to_owned(),
+            }
+        }
+    }
+
+    pub fn build(self) -> LLMRequest {
+        let base_url = self.get_base_url();
+        LLMRequest {
+            api_type: self.api_type,
+            api_key: self.api_key,
+            base_url: Some(base_url),
+            model: self.model,
+            stream: self.stream,
+            reasoning_effort: self.reasoning_effort,
+            temperature: self.temperature,
+            top_p: self.top_p,
+            max_output_tokens: self.max_output_tokens,
+            tool_choice: self.tool_choice,
+            tools: self.tools,
+            parallel_tool_calls: self.parallel_tool_calls,
+            prompt_cache_ttl: self.prompt_cache_ttl,
+            output_format: self.output_format,
+            messages: self.messages,
+        }
+    }
+}
+
+impl LLMRequest {
+    pub fn builder() -> LLMRequestBuilder {
+        LLMRequestBuilder::new()
+    }
 }
 
 pub struct LLM {}
