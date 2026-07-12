@@ -41,3 +41,23 @@ impl Display for UnsupportedPartType {
         )
     }
 }
+
+impl std::error::Error for UnsupportedPartType {}
+
+#[derive(Debug)]
+pub struct StreamParamError {
+    pub should_stream: bool,
+}
+
+impl std::error::Error for StreamParamError {}
+
+impl Display for StreamParamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = if self.should_stream {
+            "stream is set to False, but a method that implies streaming has been called"
+        } else {
+            "stream is set to True, but a method that does not imply streaming has been called"
+        };
+        write!(f, "{}", message)
+    }
+}

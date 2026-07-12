@@ -1,4 +1,5 @@
 use base64::prelude::*;
+use reqwest_retry::Jitter;
 use schemars::{JsonSchema, Schema, schema_for, schema_for_value};
 #[cfg(feature = "fs")]
 use std::fs;
@@ -8,9 +9,9 @@ use std::{
     fmt::{Debug, Display},
     io,
     str::FromStr,
+    time::Duration,
 };
 
-use erased_serde::Serialize as ErasedSerialize;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{InvalidInput, UnsupportedType};
@@ -246,14 +247,13 @@ pub enum MessagePart {
     Thinking(ThinkingPart),
 }
 
-pub trait Message: Debug + ErasedSerialize {
-    fn role(&self) -> MessageRole;
-    fn content(&self) -> Vec<MessagePart>;
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Message {
+    pub role: MessageRole,
+    pub content: Vec<MessagePart>,
 }
 
-erased_serde::serialize_trait_object!(Message);
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum ApiType {
     OpenAI,
@@ -287,9 +287,11 @@ impl Display for ApiType {
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
     None,
+    Minimal,
     Low,
     Medium,
     High,
+    Maximum,
 }
 
 impl Default for ReasoningEffort {
@@ -307,6 +309,7 @@ impl FromStr for ReasoningEffort {
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
+            "maximum" | "max" => Ok(Self::Maximum),
             _ => Err(UnsupportedType {
                 unsupported_type: s.to_owned(),
             }),
@@ -314,7 +317,7 @@ impl FromStr for ReasoningEffort {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolChoice {
     None,
@@ -378,11 +381,11 @@ pub struct LLMRequest {
     pub base_url: Option<String>,
     pub api_key: String,
     pub model: String,
-    pub messages: Vec<Box<dyn Message>>,
+    pub messages: Vec<Message>,
     pub max_output_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
-    pub reasoning_effort: ReasoningEffort,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub prompt_cache_ttl: Option<String>,
     pub stream: bool,
     pub output_format: Option<Schema>,
@@ -396,11 +399,11 @@ pub struct LLMRequestBuilder {
     base_url: Option<String>,
     api_key: String,
     model: String,
-    messages: Vec<Box<dyn Message>>,
+    messages: Vec<Message>,
     max_output_tokens: Option<u32>,
     temperature: Option<f32>,
     top_p: Option<f32>,
-    reasoning_effort: ReasoningEffort,
+    reasoning_effort: Option<ReasoningEffort>,
     prompt_cache_ttl: Option<String>,
     stream: bool,
     output_format: Option<Schema>,
@@ -418,7 +421,7 @@ impl LLMRequestBuilder {
             model: String::new(),
             messages: vec![],
             max_output_tokens: None,
-            reasoning_effort: ReasoningEffort::default(),
+            reasoning_effort: None,
             prompt_cache_ttl: None,
             stream: false,
             output_format: None,
@@ -471,7 +474,7 @@ impl LLMRequestBuilder {
         self
     }
 
-    pub fn messages(mut self, messages: Vec<Box<dyn Message>>) -> Self {
+    pub fn messages(mut self, messages: Vec<Message>) -> Self {
         self.messages = messages;
         self
     }
@@ -492,7 +495,7 @@ impl LLMRequestBuilder {
     }
 
     pub fn reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
-        self.reasoning_effort = reasoning_effort;
+        self.reasoning_effort = Some(reasoning_effort);
         self
     }
 
@@ -555,9 +558,67 @@ impl LLMRequest {
     }
 }
 
-pub struct LLM {}
+#[derive(Debug, Clone, Copy)]
+pub struct RetryPolicy {
+    pub max_retries: u32,
+    pub min_retry_interval: Duration,
+    pub max_retry_interval: Duration,
+    pub jitter: Jitter,
+    pub base: u32,
+}
 
-impl LLM {
-    pub async fn respond(&self, request: LLMRequest) {}
-    pub async fn stream_response(&self, request: LLMRequest) {}
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            min_retry_interval: Duration::from_millis(500_u64),
+            max_retry_interval: Duration::from_millis(3000_u64),
+            jitter: Jitter::Bounded,
+            base: 2,
+        }
+    }
+}
+
+impl RetryPolicy {
+    pub fn max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    pub fn min_retry_interval(mut self, min_retry_interval: Duration) -> Self {
+        self.min_retry_interval = min_retry_interval;
+        self
+    }
+
+    pub fn max_retry_interval(mut self, max_retry_interval: Duration) -> Self {
+        self.max_retry_interval = max_retry_interval;
+        self
+    }
+
+    pub fn jitter(mut self, jitter: Jitter) -> Self {
+        self.jitter = jitter;
+        self
+    }
+
+    pub fn base(mut self, base: u32) -> Self {
+        self.base = base;
+        self
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct LLMUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_read_tokens: u32,
+    pub cache_write_tokens: Option<u32>,
+    pub other_tokens: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LLMResponse {
+    pub id: String,
+    pub created_at: Option<u64>,
+    pub messages: Vec<Message>,
+    pub usage: LLMUsage,
 }

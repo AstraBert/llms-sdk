@@ -3,3 +3,31 @@ mod openai;
 mod types;
 
 pub use types::*;
+
+use crate::openai::OpenAIClient;
+
+#[derive(Debug, Default)]
+pub struct LLM {
+    pub retry_policy: RetryPolicy,
+}
+
+impl LLM {
+    pub fn new(retry_policy: RetryPolicy) -> Self {
+        Self { retry_policy }
+    }
+    pub async fn respond(
+        &self,
+        request: LLMRequest,
+    ) -> Result<LLMResponse, Box<dyn std::error::Error>> {
+        let api_type = request.api_type;
+        match api_type {
+            ApiType::OpenAI => {
+                let openai_client = OpenAIClient::new(self.retry_policy);
+                let response = openai_client.respond(request).await?;
+                Ok(response)
+            }
+            ApiType::Anthropic => Err("Not yet implemented".into()),
+        }
+    }
+    pub async fn stream_response(&self, request: LLMRequest) {}
+}
