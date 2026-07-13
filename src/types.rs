@@ -30,7 +30,6 @@ pub enum MessageRole {
     Assistant,
     System,
     Tool,
-    Function,
 }
 
 impl FromStr for MessageRole {
@@ -41,7 +40,6 @@ impl FromStr for MessageRole {
             "user" => Ok(Self::User),
             "assistant" => Ok(Self::Assistant),
             "tool" => Ok(Self::Tool),
-            "function" => Ok(Self::Function),
             "system" => Ok(Self::System),
             _ => Err(UnsupportedType {
                 unsupported_type: s.to_owned(),
@@ -238,6 +236,19 @@ impl AudioPart {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallPart {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResultPart {
+    pub tool_call_id: String,
+    pub result: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 #[non_exhaustive]
 pub enum MessagePart {
@@ -245,6 +256,8 @@ pub enum MessagePart {
     Image(ImagePart),
     Audio(AudioPart),
     Thinking(ThinkingPart),
+    ToolCall(ToolCallPart),
+    ToolResult(ToolResultPart),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

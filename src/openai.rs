@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ApiType, AudioPart, CHAT_COMPLETIONS_ENDPOINT, ImagePart, LLMRequest, LLMResponse, LLMUsage,
-    Message, MessagePart, MessageRole, ReasoningEffort, RetryPolicy, TextPart, Tool, ToolChoice,
+    Message, MessagePart, MessageRole, ReasoningEffort, RetryPolicy, TextPart, Tool, ToolCallPart,
+    ToolChoice, ToolResultPart,
     errors::{StreamParamError, UnsupportedPartType},
 };
 
@@ -21,14 +22,12 @@ pub enum OpenAIMessageRole {
     User,
     Assistant,
     Tool,
-    Function,
 }
 
 impl From<MessageRole> for OpenAIMessageRole {
     fn from(value: MessageRole) -> Self {
         match value {
             MessageRole::Assistant => Self::Assistant,
-            MessageRole::Function => Self::Function,
             MessageRole::System => Self::Developer,
             MessageRole::Tool => Self::Tool,
             MessageRole::User => Self::User,
@@ -103,15 +102,38 @@ impl From<AudioPart> for OpenAIAudioPart {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIFunctionCall {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIToolCallPart {
+    pub id: String,
+    pub function: OpenAIFunctionCall,
+    #[serde(rename = "type")]
+    pub part_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIToolResultPart {
+    tool_call_id: String,
+    content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OpenAIMessagePart {
     Text(OpenAITextPart),
     Audio(OpenAIAudioPart),
     Image(OpenAIImagePart),
+    ToolCall(OpenAIToolCallPart),
+    ToolResult(OpenAIToolResultPart),
 }
 
 impl TryFrom<MessagePart> for OpenAIMessagePart {
     type Error = UnsupportedPartType;
+    #[allow(unreachable_patterns)]
     fn try_from(value: MessagePart) -> Result<Self, Self::Error> {
         match value {
             MessagePart::Text(t) => Ok(Self::Text(OpenAITextPart::from(t))),
@@ -121,6 +143,18 @@ impl TryFrom<MessagePart> for OpenAIMessagePart {
                 part_type: "thinking".to_string(),
                 api_type: ApiType::OpenAI.to_string(),
             }),
+            MessagePart::ToolCall(tc) => Ok(Self::ToolCall(OpenAIToolCallPart {
+                id: tc.id,
+                function: OpenAIFunctionCall {
+                    name: tc.name,
+                    arguments: tc.arguments,
+                },
+                part_type: "function".to_string(),
+            })),
+            MessagePart::ToolResult(tr) => Ok(Self::ToolResult(OpenAIToolResultPart {
+                tool_call_id: tr.tool_call_id,
+                content: tr.result,
+            })),
             _ => Err(UnsupportedPartType {
                 part_type: "unknown".to_string(),
                 api_type: ApiType::OpenAI.to_string(),
@@ -130,65 +164,219 @@ impl TryFrom<MessagePart> for OpenAIMessagePart {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct OpenAIMessage {
+pub struct OpenAISimpleMessage {
     pub role: OpenAIMessageRole,
     pub content: Vec<OpenAIMessagePart>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpenAIAssistantMessage {
+    pub role: OpenAIMessageRole,
+    pub content: Vec<OpenAIMessagePart>,
+    pub tool_calls: Option<Vec<OpenAIToolCallPart>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpenAIToolResultMessage {
+    pub role: OpenAIMessageRole,
+    pub content: String,
+    pub tool_call_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum OpenAIMessage {
+    User(OpenAISimpleMessage),
+    Developer(OpenAISimpleMessage),
+    Assistant(OpenAIAssistantMessage),
+    Tool(OpenAIToolResultMessage),
 }
 
 impl TryFrom<Message> for OpenAIMessage {
     type Error = UnsupportedPartType;
 
     fn try_from(value: Message) -> Result<Self, Self::Error> {
-        let mut content = vec![];
-        for m in value.content {
-            content.push(OpenAIMessagePart::try_from(m)?);
+        match value.role {
+            MessageRole::User | MessageRole::System => {
+                let mut content = vec![];
+                for p in value.content {
+                    let part = OpenAIMessagePart::try_from(p)?;
+                    match part {
+                        OpenAIMessagePart::ToolCall(_) | OpenAIMessagePart::ToolResult(_) => {
+                            return Err(UnsupportedPartType {
+                                part_type: "tool_call or tool_result (for user/system message)"
+                                    .to_string(),
+                                api_type: ApiType::OpenAI.to_string(),
+                            });
+                        }
+                        _ => content.push(part),
+                    }
+                }
+                Ok(Self::User(OpenAISimpleMessage {
+                    role: OpenAIMessageRole::from(value.role),
+                    content,
+                }))
+            }
+            MessageRole::Assistant => {
+                let mut content = vec![];
+                let mut tool_calls: Option<Vec<OpenAIToolCallPart>> = None;
+                for p in value.content {
+                    let part = OpenAIMessagePart::try_from(p)?;
+                    match part {
+                        OpenAIMessagePart::ToolCall(tc) => {
+                            tool_calls.get_or_insert_with(Vec::new).push(tc)
+                        }
+                        OpenAIMessagePart::ToolResult(_) => {
+                            return Err(UnsupportedPartType {
+                                part_type: "tool_result (for assistant message)".to_string(),
+                                api_type: ApiType::OpenAI.to_string(),
+                            });
+                        }
+                        _ => content.push(part),
+                    }
+                }
+                Ok(Self::Assistant(OpenAIAssistantMessage {
+                    role: OpenAIMessageRole::Assistant,
+                    content,
+                    tool_calls,
+                }))
+            }
+            MessageRole::Tool => {
+                if value.content.len() != 1 {
+                    return Err(UnsupportedPartType {
+                        part_type: "multiple tool results".to_string(),
+                        api_type: ApiType::OpenAI.to_string(),
+                    });
+                }
+                let mut content = String::new();
+                let mut tool_call_id: Option<String> = None;
+                for p in value.content {
+                    let part = OpenAIMessagePart::try_from(p)?;
+                    match part {
+                        OpenAIMessagePart::ToolResult(t) => {
+                            content += &t.content;
+                            tool_call_id = Some(t.tool_call_id);
+                        }
+                        _ => {
+                            return Err(UnsupportedPartType {
+                                part_type:
+                                    "non-tool_result parts are not supported as tool results"
+                                        .to_string(),
+                                api_type: ApiType::OpenAI.to_string(),
+                            });
+                        }
+                    }
+                }
+                if let Some(tid) = tool_call_id {
+                    return Ok(Self::Tool(OpenAIToolResultMessage {
+                        role: OpenAIMessageRole::Tool,
+                        content,
+                        tool_call_id: tid,
+                    }));
+                } else {
+                    return Err(UnsupportedPartType {
+                        part_type: "tool_result does not have a tool_call_id".to_string(),
+                        api_type: ApiType::OpenAI.to_string(),
+                    });
+                }
+            }
         }
-        Ok(Self {
-            role: OpenAIMessageRole::from(value.role),
-            content,
-        })
     }
 }
 
 impl Into<Message> for OpenAIMessage {
     fn into(self) -> Message {
-        Message {
-            role: {
-                match self.role {
-                    OpenAIMessageRole::Assistant => MessageRole::Assistant,
-                    OpenAIMessageRole::Developer => MessageRole::System,
-                    OpenAIMessageRole::Function => MessageRole::Function,
-                    OpenAIMessageRole::User => MessageRole::User,
-                    OpenAIMessageRole::Tool => MessageRole::Tool,
-                }
-            },
-            content: {
-                let mut cs = vec![];
-                for c in self.content {
-                    let part = match c {
-                        OpenAIMessagePart::Audio(a) => MessagePart::Audio(AudioPart {
-                            data: a.input_audio.data,
-                            mime_type: a.input_audio.format,
-                        }),
-                        OpenAIMessagePart::Text(t) => MessagePart::Text(TextPart { text: t.text }),
-                        OpenAIMessagePart::Image(i) => {
-                            let mime_type = if i.image_url.starts_with("data:") {
-                                let (d, _) =
-                                    i.image_url.split_once(";").expect("Malformed base64 data");
-                                Some(d.replace("data:", "").trim().to_owned())
-                            } else {
-                                None
-                            };
-                            MessagePart::Image(ImagePart {
-                                data: i.image_url.clone(),
-                                is_base64: i.image_url.starts_with("data:"),
-                                mime_type,
-                            })
+        match self {
+            Self::User(u) => {
+                let mut content = vec![];
+                for c in u.content {
+                    match c {
+                        OpenAIMessagePart::Text(t) => {
+                            content.push(MessagePart::Text(TextPart { text: t.text }))
                         }
-                    };
-                    cs.push(part);
+                        OpenAIMessagePart::Audio(a) => {
+                            content.push(MessagePart::Audio(AudioPart {
+                                data: a.input_audio.data,
+                                mime_type: a.input_audio.format,
+                            }))
+                        }
+                        OpenAIMessagePart::Image(i) => {
+                            let (is_base64, mime_type, data) = if i.image_url.starts_with("data:") {
+                                let (split, data) = i
+                                    .image_url
+                                    .split_once(";")
+                                    .expect("Should return a clean split around ';'");
+                                let format = split.replace("data:", "").trim().to_owned();
+                                (
+                                    true,
+                                    Some(format),
+                                    data.replacen("base64,", "", 1).to_owned(),
+                                )
+                            } else {
+                                (false, None, i.image_url)
+                            };
+                            content.push(MessagePart::Image(ImagePart {
+                                data,
+                                is_base64,
+                                mime_type,
+                            }));
+                        }
+                        // user is not supposed to have tool calls or results
+                        _ => continue,
+                    }
                 }
-                cs
+                Message {
+                    role: MessageRole::User,
+                    content,
+                }
+            }
+            Self::Assistant(a) => {
+                let mut content = vec![];
+                for c in a.content {
+                    match c {
+                        OpenAIMessagePart::Text(t) => {
+                            content.push(MessagePart::Text(TextPart { text: t.text }))
+                        }
+                        // assitant is not supposed to produce anything other than text, tool calls are below
+                        _ => continue,
+                    }
+                }
+                if let Some(tcs) = a.tool_calls {
+                    for tc in tcs {
+                        content.push(MessagePart::ToolCall(ToolCallPart {
+                            id: tc.id,
+                            name: tc.function.name,
+                            arguments: tc.function.arguments,
+                        }));
+                    }
+                }
+                Message {
+                    role: MessageRole::Assistant,
+                    content,
+                }
+            }
+            Self::Developer(d) => {
+                let mut content = vec![];
+                for c in d.content {
+                    match c {
+                        OpenAIMessagePart::Text(t) => {
+                            content.push(MessagePart::Text(TextPart { text: t.text }))
+                        }
+                        // system messages should only contain text
+                        _ => continue,
+                    }
+                }
+                Message {
+                    role: MessageRole::System,
+                    content,
+                }
+            }
+            Self::Tool(t) => Message {
+                role: MessageRole::Tool,
+                content: vec![MessagePart::ToolResult(ToolResultPart {
+                    tool_call_id: t.tool_call_id,
+                    result: t.content,
+                })],
             },
         }
     }
@@ -284,7 +472,8 @@ pub struct OpenAIRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<ToolChoice>,
     stream: bool,
-    parallel_tool_calls: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
 }
@@ -296,6 +485,11 @@ impl TryFrom<LLMRequest> for OpenAIRequest {
         for m in value.messages {
             messages.push(OpenAIMessage::try_from(m)?);
         }
+        let parallel_tool_calls = if let Some(_) = value.tools {
+            Some(value.parallel_tool_calls)
+        } else {
+            None
+        };
         Ok(Self {
             model: value.model,
             messages,
@@ -307,7 +501,7 @@ impl TryFrom<LLMRequest> for OpenAIRequest {
                 mode: PromptCacheMode::default(),
                 ttl,
             }),
-            parallel_tool_calls: value.parallel_tool_calls,
+            parallel_tool_calls,
             stream: value.stream,
             top_p: value.top_p,
             response_format: value.output_format.map(|f| ResponseFormat {
@@ -361,9 +555,35 @@ impl From<OpenAIUsage> for LLMUsage {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CompletionMessage {
+    pub role: OpenAIMessageRole,
+    pub content: String,
+    pub tool_calls: Option<Vec<OpenAIToolCallPart>>,
+}
+
+impl Into<Message> for CompletionMessage {
+    fn into(self) -> Message {
+        let mut content = vec![MessagePart::Text(TextPart { text: self.content })];
+        if let Some(tcs) = self.tool_calls {
+            for tc in tcs {
+                content.push(MessagePart::ToolCall(ToolCallPart {
+                    id: tc.id,
+                    name: tc.function.name,
+                    arguments: tc.function.arguments,
+                }));
+            }
+        }
+        Message {
+            role: MessageRole::Assistant,
+            content,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatCompletion {
     index: usize,
-    message: OpenAIMessage,
+    message: CompletionMessage,
     finish_reason: String,
 }
 
@@ -424,6 +644,7 @@ impl OpenAIClient {
         let response = client
             .post(format!("{}{}", base_url, CHAT_COMPLETIONS_ENDPOINT))
             .bearer_auth(api_key)
+            .header("Content-Type", "application/json")
             .body(body)
             .send()
             .await?
