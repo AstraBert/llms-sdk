@@ -1,6 +1,5 @@
 use async_stream::stream;
 use eventsource_stream::Eventsource;
-use futures_core::stream::Stream;
 use futures_util::StreamExt;
 use reqwest_middleware::ClientBuilder;
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
@@ -8,9 +7,10 @@ use schemars::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ApiType, AudioPart, CHAT_COMPLETIONS_ENDPOINT, ImagePart, LLMRequest, LLMResponse, LLMUsage,
-    Message, MessagePart, MessageRole, ReasoningEffort, RetryPolicy, TextPart, Tool, ToolCallPart,
-    ToolChoice, ToolResultPart,
+    ApiType, AudioPart, CHAT_COMPLETIONS_ENDPOINT, ImagePart, LLMRequest, LLMResponse, LLMStream,
+    LLMStreamingComplete, LLMStreamingDelta, LLMStreamingResponse, LLMUsage, Message, MessagePart,
+    MessageRole, ReasoningEffort, RetryPolicy, TextPart, Tool, ToolCallPart, ToolChoice,
+    ToolResultPart,
     errors::{StreamParamError, UnsupportedPartType},
 };
 
@@ -458,6 +458,11 @@ pub struct ResponseFormat {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpenAIStreamOptions {
+    pub include_usage: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OpenAIRequest {
     model: String,
     messages: Vec<OpenAIMessage>,
@@ -480,6 +485,9 @@ pub struct OpenAIRequest {
     parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
+    store: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<OpenAIStreamOptions>,
 }
 
 impl TryFrom<LLMRequest> for OpenAIRequest {
@@ -491,6 +499,13 @@ impl TryFrom<LLMRequest> for OpenAIRequest {
         }
         let parallel_tool_calls = if let Some(_) = value.tools {
             Some(value.parallel_tool_calls)
+        } else {
+            None
+        };
+        let stream_options = if value.stream {
+            Some(OpenAIStreamOptions {
+                include_usage: true,
+            })
         } else {
             None
         };
@@ -515,6 +530,8 @@ impl TryFrom<LLMRequest> for OpenAIRequest {
             reasoning_effort: value
                 .reasoning_effort
                 .map(|r| OpenAIReasoningEffort::from(r)),
+            store: true,
+            stream_options,
         })
     }
 }
@@ -547,13 +564,31 @@ impl From<OpenAIUsage> for LLMUsage {
         Self {
             input_tokens: value.prompt_tokens,
             output_tokens: value.completion_tokens,
-            cache_read_tokens: value.prompt_tokens_details.cached_tokens,
+            cache_read_tokens: Some(value.prompt_tokens_details.cached_tokens),
             cache_write_tokens: None,
             other_tokens: Some(
                 value.prompt_tokens_details.audio_tokens
                     + value.completion_tokens_details.audio_tokens
                     + value.completion_tokens_details.reasoning_tokens,
             ),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpenAISimplifiedUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
+}
+
+impl From<OpenAISimplifiedUsage> for LLMUsage {
+    fn from(value: OpenAISimplifiedUsage) -> Self {
+        Self {
+            input_tokens: value.prompt_tokens,
+            output_tokens: value.completion_tokens,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            other_tokens: None,
         }
     }
 }
@@ -618,6 +653,63 @@ impl From<OpenAIResponse> for LLMResponse {
     }
 }
 
+fn default_streaming_role() -> OpenAIMessageRole {
+    OpenAIMessageRole::Assistant
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamingCompletionDelta {
+    #[serde(default = "default_streaming_role")]
+    pub role: OpenAIMessageRole,
+    #[serde(default)]
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamingChatCompletion {
+    pub index: u32,
+    pub delta: StreamingCompletionDelta,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpenAIStreamingMessage {
+    pub id: String,
+    pub created: u64,
+    pub choices: Vec<StreamingChatCompletion>,
+    pub usage: Option<OpenAISimplifiedUsage>,
+}
+
+impl From<OpenAIStreamingMessage> for LLMStreamingDelta {
+    fn from(value: OpenAIStreamingMessage) -> Self {
+        let (delta, is_stop) = value
+            .choices
+            .first()
+            .map_or((Some(String::new()), true), |d| {
+                (d.delta.content.clone(), d.finish_reason.is_some())
+            });
+        LLMStreamingDelta {
+            response_id: value.id,
+            created_at: Some(value.created),
+            delta,
+            stop: is_stop,
+        }
+    }
+}
+
+fn deltas_to_message(deltas: &[LLMStreamingDelta]) -> Message {
+    let mut content = vec![];
+    for delta in deltas {
+        content.push(MessagePart::Text(TextPart {
+            text: delta.delta.to_owned().unwrap_or_default(),
+        }));
+    }
+    Message {
+        role: MessageRole::User,
+        content,
+    }
+}
+
 impl OpenAIClient {
     pub fn new(retry_policy: RetryPolicy) -> Self {
         Self { retry_policy }
@@ -665,7 +757,7 @@ impl OpenAIClient {
     pub async fn stream_response(
         &self,
         request: LLMRequest,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<LLMStream, Box<dyn std::error::Error>> {
         let base_url = request.base_url.clone().unwrap();
         let api_key = request.api_key.clone();
         if !request.stream {
@@ -689,7 +781,7 @@ impl OpenAIClient {
         let body = serde_json::to_string(&req)?;
         let mut events = client
             .post(format!("{}{}", base_url, CHAT_COMPLETIONS_ENDPOINT))
-            .bearer_auth(api_key)
+            .bearer_auth(api_key.clone())
             .header("Content-Type", "application/json")
             .body(body)
             .send()
@@ -698,10 +790,54 @@ impl OpenAIClient {
             .bytes_stream()
             .eventsource();
 
-        while let Some(event) = events.next().await {
-            let event = event?;
-        }
+        let mut deltas: Vec<LLMStreamingDelta> = vec![];
+        let mut response_id: Option<String> = None;
+        let mut first_created: Option<u64> = None;
+        let mut resp_usage: Option<LLMUsage> = None;
 
-        Ok(())
+        let s: LLMStream = Box::pin(stream! {
+            while let Some(ev) = events.next().await {
+                match ev {
+                    Ok(event) => {
+                        if event.data == "[DONE]" {
+                            let message = deltas_to_message(&deltas);
+                            yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id.clone().unwrap(), deltas: deltas.clone(), created_at: first_created, usage: resp_usage, message }))
+                        } else {
+                            let json_result: Result<OpenAIStreamingMessage, serde_json::Error> = serde_json::from_str(&event.data);
+                            match json_result {
+                                Ok(json) => {
+                                    let streaming_delta = LLMStreamingDelta::from(json.clone());
+                                    if let Some(u) = json.usage {
+                                        resp_usage = Some(LLMUsage::from(u));
+                                    }
+                                    if let Some(_) = response_id {
+
+                                    } else {
+                                        response_id = Some(json.id);
+                                    }
+                                    if let Some(_) = first_created {
+
+                                    } else {
+                                        first_created = Some(json.created);
+                                    }
+                                    deltas.push(streaming_delta.clone());
+                                    yield Ok(LLMStreamingResponse::Delta(streaming_delta));
+                                },
+                                Err(err) => {
+                                    yield Err(err.into());
+                                    return;
+                                }
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        yield Err(e.into());
+                        return;
+                    }
+                }
+            }
+        });
+
+        Ok(s)
     }
 }

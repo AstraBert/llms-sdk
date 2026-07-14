@@ -625,7 +625,7 @@ impl RetryPolicy {
 pub struct LLMUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
-    pub cache_read_tokens: u32,
+    pub cache_read_tokens: Option<u32>,
     pub cache_write_tokens: Option<u32>,
     pub other_tokens: Option<u32>,
 }
@@ -639,7 +639,7 @@ pub struct LLMResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct StreamingDelta {
+pub struct LLMStreamingDelta {
     pub response_id: String,
     pub created_at: Option<u64>,
     pub delta: Option<String>,
@@ -647,13 +647,20 @@ pub struct StreamingDelta {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LLMStreamingResponse {
+pub struct LLMStreamingComplete {
     pub id: String,
     pub created_at: Option<u64>,
     pub message: Message,
-    pub deltas: Vec<StreamingDelta>,
+    pub deltas: Vec<LLMStreamingDelta>,
     pub usage: Option<LLMUsage>,
 }
 
-pub type LLMStreamItem = Result<StreamingDelta, Box<dyn std::error::Error + Send + Sync>>;
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum LLMStreamingResponse {
+    Delta(LLMStreamingDelta),
+    Complete(LLMStreamingComplete),
+}
+
+pub type LLMStreamItem = Result<LLMStreamingResponse, Box<dyn std::error::Error + Send + Sync>>;
 pub type LLMStream = Pin<Box<dyn Stream<Item = LLMStreamItem>>>;

@@ -29,5 +29,18 @@ impl LLM {
             ApiType::Anthropic => Err("Not yet implemented".into()),
         }
     }
-    pub async fn stream_response(&self, request: LLMRequest) {}
+    pub async fn stream_response(
+        &self,
+        request: LLMRequest,
+    ) -> Result<LLMStream, Box<dyn std::error::Error>> {
+        let api_type = request.api_type;
+        match api_type {
+            ApiType::OpenAI => {
+                let openai_client = OpenAIClient::new(self.retry_policy);
+                let stream = openai_client.stream_response(request).await?;
+                Ok(stream)
+            }
+            ApiType::Anthropic => Err("Not yet implemented".into()),
+        }
+    }
 }

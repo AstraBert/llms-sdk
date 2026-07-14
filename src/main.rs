@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use clap::Parser;
+use futures_util::StreamExt;
 use llms_sdk::{ApiType, LLM, LLMRequest, Message, MessagePart, TextPart};
 
 #[derive(Debug, Parser)]
@@ -72,20 +73,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
     if !args.stream {
         let response = llm.respond(request).await?;
-        for m in response.messages {
-            for p in m.content {
-                match p {
-                    MessagePart::Text(t) => println!("{}", t.text),
-                    MessagePart::Thinking(t) => {
-                        println!("\x1b[38;5;247mThinking: {}\x1b[0m", t.thinking)
-                    }
-                    // Should not produce anything apart from text and thinking
-                    _ => continue,
+        for p in response.message.content {
+            match p {
+                MessagePart::Text(t) => println!("{}", t.text),
+                MessagePart::Thinking(t) => {
+                    println!("\x1b[38;5;247mThinking: {}\x1b[0m", t.thinking)
                 }
+                // Should not produce anything apart from text and thinking
+                _ => continue,
             }
         }
     } else {
-        eprintln!("Not yet implemented!");
+        let mut stream = llm.stream_response(request).await?;
+        while let Some(event) = stream.next().await {
+            let event = event.map_err(|e| e.to_string())?;
+            match event {
+                llms_sdk::LLMStreamingResponse::Delta(d) => {
+                    print!("{}", d.delta.unwrap_or_default())
+                }
+                llms_sdk::LLMStreamingResponse::Complete(c) => println!(
+                    "\n\n\x1b[38;5;247mInput Tokens: {:?}; Output Tokens: {:?}",
+                    c.usage.map_or(0, |r| r.input_tokens),
+                    c.usage.map_or(0, |r| r.output_tokens)
+                ),
+            }
+        }
     }
     Ok(())
 }
