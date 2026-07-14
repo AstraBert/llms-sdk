@@ -1,3 +1,7 @@
+use async_stream::stream;
+use eventsource_stream::Eventsource;
+use futures_core::stream::Stream;
+use futures_util::StreamExt;
 use reqwest_middleware::ClientBuilder;
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use schemars::Schema;
@@ -598,12 +602,15 @@ pub struct OpenAIResponse {
 
 impl From<OpenAIResponse> for LLMResponse {
     fn from(value: OpenAIResponse) -> Self {
-        let messages: Vec<Message> = value
+        let message: Message = value
             .choices
             .first()
-            .map_or(vec![], |c| vec![c.message.to_owned().into()]);
+            .expect("LLM should have produced at least 1 message")
+            .message
+            .to_owned()
+            .into();
         Self {
-            messages,
+            message,
             usage: LLMUsage::from(value.usage),
             id: value.id,
             created_at: Some(value.created),
@@ -648,9 +655,53 @@ impl OpenAIClient {
             .body(body)
             .send()
             .await?
+            .error_for_status()?
             .json::<OpenAIResponse>()
             .await?;
 
         Ok(LLMResponse::from(response))
+    }
+
+    pub async fn stream_response(
+        &self,
+        request: LLMRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let base_url = request.base_url.clone().unwrap();
+        let api_key = request.api_key.clone();
+        if !request.stream {
+            return Err(StreamParamError {
+                should_stream: true,
+            }
+            .into());
+        }
+        let req = OpenAIRequest::try_from(request)?;
+        let retry = ExponentialBackoff::builder()
+            .base(self.retry_policy.base)
+            .jitter(self.retry_policy.jitter)
+            .retry_bounds(
+                self.retry_policy.min_retry_interval,
+                self.retry_policy.max_retry_interval,
+            )
+            .build_with_max_retries(self.retry_policy.max_retries);
+        let client = ClientBuilder::new(reqwest::Client::new())
+            .with(RetryTransientMiddleware::new_with_policy(retry))
+            .build();
+        let body = serde_json::to_string(&req)?;
+        let mut events = client
+            .post(format!("{}{}", base_url, CHAT_COMPLETIONS_ENDPOINT))
+            .bearer_auth(api_key)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes_stream()
+            .eventsource();
+
+        while let Some(event) = events.next().await {
+            let event = event?;
+        }
+
+        Ok(())
     }
 }

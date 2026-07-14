@@ -1,4 +1,5 @@
 use base64::prelude::*;
+use futures_core::Stream;
 use reqwest_retry::Jitter;
 use schemars::{JsonSchema, Schema, schema_for, schema_for_value};
 #[cfg(feature = "fs")]
@@ -8,6 +9,7 @@ use std::path::PathBuf;
 use std::{
     fmt::{Debug, Display},
     io,
+    pin::Pin,
     str::FromStr,
     time::Duration,
 };
@@ -632,6 +634,26 @@ pub struct LLMUsage {
 pub struct LLMResponse {
     pub id: String,
     pub created_at: Option<u64>,
-    pub messages: Vec<Message>,
+    pub message: Message,
     pub usage: LLMUsage,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamingDelta {
+    pub response_id: String,
+    pub created_at: Option<u64>,
+    pub delta: Option<String>,
+    pub stop: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LLMStreamingResponse {
+    pub id: String,
+    pub created_at: Option<u64>,
+    pub message: Message,
+    pub deltas: Vec<StreamingDelta>,
+    pub usage: Option<LLMUsage>,
+}
+
+pub type LLMStreamItem = Result<StreamingDelta, Box<dyn std::error::Error + Send + Sync>>;
+pub type LLMStream = Pin<Box<dyn Stream<Item = LLMStreamItem>>>;
