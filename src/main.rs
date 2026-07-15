@@ -2,7 +2,9 @@ use std::str::FromStr;
 
 use clap::Parser;
 use futures_util::StreamExt;
-use llms_sdk::{ApiType, LLM, LLMRequest, Message, MessagePart, TextPart};
+use llms_sdk::{ApiType, LLM, LLMRequest, Message, MessagePart, TextPart, Tool};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
 #[command(version = "0.1.0")]
@@ -36,6 +38,11 @@ struct Args {
     stream: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct WeatherTool {
+    pub location: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
@@ -65,6 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .api_type(api_type)
         .api_key(api_key)
         .model(args.model)
+        .add_tool(Tool::new::<WeatherTool>(
+            "weather_tool",
+            "call this tool whenever asked about the weather",
+        ))
         .stream(args.stream)
         .messages(vec![Message {
             role: llms_sdk::MessageRole::User,
@@ -91,10 +102,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 llms_sdk::LLMStreamingResponse::Delta(d) => {
                     print!("{}", d.delta.unwrap_or_default())
                 }
+                llms_sdk::LLMStreamingResponse::ToolDelta(tc) => {
+                    print!("{}", tc.partial_arguments)
+                }
                 llms_sdk::LLMStreamingResponse::Complete(c) => println!(
-                    "\n\n\x1b[38;5;247mInput Tokens: {:?}; Output Tokens: {:?}",
+                    "\n\n\x1b[38;5;247mInput Tokens: {:?}; Output Tokens: {:?}; Tool Calls: {:?}",
                     c.usage.map_or(0, |r| r.input_tokens),
-                    c.usage.map_or(0, |r| r.output_tokens)
+                    c.usage.map_or(0, |r| r.output_tokens),
+                    c.tool_calls.map_or(0, |r| r.len())
                 ),
             }
         }

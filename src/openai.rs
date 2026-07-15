@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use async_stream::stream;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
@@ -8,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ApiType, AudioPart, CHAT_COMPLETIONS_ENDPOINT, ImagePart, LLMRequest, LLMResponse, LLMStream,
-    LLMStreamingComplete, LLMStreamingDelta, LLMStreamingResponse, LLMUsage, Message, MessagePart,
-    MessageRole, ReasoningEffort, RetryPolicy, TextPart, Tool, ToolCallPart, ToolChoice,
+    LLMStreamingComplete, LLMStreamingDelta, LLMStreamingResponse, LLMToolDelta, LLMUsage, Message,
+    MessagePart, MessageRole, ReasoningEffort, RetryPolicy, TextPart, ToolCallPart, ToolChoice,
     ToolResultPart,
     errors::{StreamParamError, UnsupportedPartType},
 };
@@ -463,6 +465,20 @@ pub struct OpenAIStreamOptions {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpenAIFunction {
+    pub name: String,
+    pub description: String,
+    pub parameters: Schema,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpenAITool {
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: OpenAIFunction,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OpenAIRequest {
     model: String,
     messages: Vec<OpenAIMessage>,
@@ -477,7 +493,7 @@ pub struct OpenAIRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<OpenAIReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<Tool>>,
+    tools: Option<Vec<OpenAITool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<ToolChoice>,
     stream: bool,
@@ -509,13 +525,26 @@ impl TryFrom<LLMRequest> for OpenAIRequest {
         } else {
             None
         };
+        let mut tools = None;
+        if let Some(ts) = value.tools {
+            for t in ts {
+                tools.get_or_insert_with(Vec::new).push(OpenAITool {
+                    tool_type: "function".to_string(),
+                    function: OpenAIFunction {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.parameters,
+                    },
+                });
+            }
+        }
         Ok(Self {
             model: value.model,
             messages,
             max_completion_tokens: value.max_output_tokens,
             temperature: value.temperature,
             tool_choice: value.tool_choice,
-            tools: value.tools,
+            tools,
             prompt_cache_options: value.prompt_cache_ttl.map(|ttl| PromptCacheOptions {
                 mode: PromptCacheMode::default(),
                 ttl,
@@ -658,11 +687,30 @@ fn default_streaming_role() -> OpenAIMessageRole {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamingFunction {
+    #[serde(default)]
+    pub name: Option<String>,
+    pub arguments: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamingCompletionToolCall {
+    pub index: u32,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(rename = "type", default)]
+    pub call_type: Option<String>,
+    pub function: StreamingFunction,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamingCompletionDelta {
     #[serde(default = "default_streaming_role")]
     pub role: OpenAIMessageRole,
     #[serde(default)]
     pub content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<StreamingCompletionToolCall>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -707,6 +755,18 @@ fn deltas_to_message(deltas: &[LLMStreamingDelta]) -> Message {
     Message {
         role: MessageRole::User,
         content,
+    }
+}
+
+/// Parse a JSON string that may be incomplete (e.g. streaming tool arguments).
+///
+/// Returns [`JsonResult::Incomplete`] when the payload is cut off mid-token,
+/// allowing the caller to buffer and retry.
+pub fn is_valid_json(s: &str) -> bool {
+    let v = serde_json::from_str::<serde_json::Value>(s);
+    match v {
+        Ok(_) => true,
+        Err(_) => false,
     }
 }
 
@@ -794,6 +854,7 @@ impl OpenAIClient {
         let mut response_id: Option<String> = None;
         let mut first_created: Option<u64> = None;
         let mut resp_usage: Option<LLMUsage> = None;
+        let mut indexed_tool_calls: BTreeMap<u32, StreamingCompletionToolCall> = BTreeMap::new();
 
         let s: LLMStream = Box::pin(stream! {
             while let Some(ev) = events.next().await {
@@ -801,12 +862,31 @@ impl OpenAIClient {
                     Ok(event) => {
                         if event.data == "[DONE]" {
                             let message = deltas_to_message(&deltas);
-                            yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id.clone().unwrap(), deltas: deltas.clone(), created_at: first_created, usage: resp_usage, message }))
+                            let mut tool_calls = None;
+                            if !indexed_tool_calls.is_empty() {
+                                for (_, tc) in indexed_tool_calls.clone() {
+                                    if !is_valid_json(&tc.function.arguments) {
+                                        continue;
+                                    }
+                                    tool_calls.get_or_insert_with(Vec::new).push(ToolCallPart { id: tc.id.expect("The tool call should have been registered with an ID"), name: tc.function.name.expect("The tool call should have been registered with a function name"), arguments: tc.function.arguments });
+                                }
+                            }
+                            yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id.clone().unwrap(), deltas: deltas.clone(), created_at: first_created, usage: resp_usage, message, tool_calls }))
                         } else {
                             let json_result: Result<OpenAIStreamingMessage, serde_json::Error> = serde_json::from_str(&event.data);
                             match json_result {
                                 Ok(json) => {
                                     let streaming_delta = LLMStreamingDelta::from(json.clone());
+                                    deltas.push(streaming_delta.clone());
+                                    yield Ok(LLMStreamingResponse::Delta(streaming_delta));
+                                    let tool_calls = json.choices.first().map_or(None, |c| c.delta.tool_calls.clone());
+                                    if let Some(tcs) = tool_calls {
+                                        for t in tcs {
+                                            indexed_tool_calls.entry(t.index).and_modify(|v| v.function.arguments += &t.function.arguments).or_insert(t.clone());
+                                            let indexd_tool_call = indexed_tool_calls.get(&t.index).unwrap();
+                                            yield Ok(LLMStreamingResponse::ToolDelta(LLMToolDelta { tool_call_id: indexd_tool_call.id.clone().expect("Tool call should have been registered with an ID"), name: indexd_tool_call.function.name.clone().expect("Tool call should have been registered with a name"), partial_arguments: t.function.arguments }))
+                                        }
+                                    }
                                     if let Some(u) = json.usage {
                                         resp_usage = Some(LLMUsage::from(u));
                                     }
@@ -820,8 +900,6 @@ impl OpenAIClient {
                                     } else {
                                         first_created = Some(json.created);
                                     }
-                                    deltas.push(streaming_delta.clone());
-                                    yield Ok(LLMStreamingResponse::Delta(streaming_delta));
                                 },
                                 Err(err) => {
                                     yield Err(err.into());

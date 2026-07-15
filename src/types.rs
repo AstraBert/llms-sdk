@@ -369,22 +369,22 @@ pub struct Tool {
 }
 
 impl Tool {
-    pub fn new<T: JsonSchema>(name: String, description: String) -> Self {
+    pub fn new<T: JsonSchema>(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
-            name,
-            description,
+            name: name.into(),
+            description: description.into(),
             parameters: schema_for!(T),
         }
     }
 
     pub fn from_parameters_value(
-        name: String,
-        description: String,
+        name: impl Into<String>,
+        description: impl Into<String>,
         parameters: impl Serialize,
     ) -> Self {
         Self {
-            name,
-            description,
+            name: name.into(),
+            description: description.into(),
             parameters: schema_for_value!(parameters),
         }
     }
@@ -647,18 +647,27 @@ pub struct LLMStreamingDelta {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LLMToolDelta {
+    pub tool_call_id: String,
+    pub name: String,
+    pub partial_arguments: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMStreamingComplete {
     pub id: String,
     pub created_at: Option<u64>,
     pub message: Message,
     pub deltas: Vec<LLMStreamingDelta>,
     pub usage: Option<LLMUsage>,
+    pub tool_calls: Option<Vec<ToolCallPart>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum LLMStreamingResponse {
     Delta(LLMStreamingDelta),
+    ToolDelta(LLMToolDelta),
     Complete(LLMStreamingComplete),
 }
 
