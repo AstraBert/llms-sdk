@@ -512,11 +512,6 @@ impl TryFrom<LLMRequest> for OpenAIRequest {
         for m in value.messages {
             messages.push(OpenAIMessage::try_from(m)?);
         }
-        let parallel_tool_calls = if let Some(_) = value.tools {
-            Some(value.parallel_tool_calls)
-        } else {
-            None
-        };
         let stream_options = if value.stream {
             Some(OpenAIStreamOptions {
                 include_usage: true,
@@ -525,7 +520,11 @@ impl TryFrom<LLMRequest> for OpenAIRequest {
             None
         };
         let mut tools = None;
-        if let Some(ts) = value.tools {
+        let mut parallel_tool_calls = None;
+        if let Some(ts) = value.tools
+            && !ts.is_empty()
+        {
+            parallel_tool_calls = Some(value.parallel_tool_calls);
             for t in ts {
                 tools.get_or_insert_with(Vec::new).push(OpenAITool {
                     tool_type: "function".to_string(),
@@ -837,17 +836,6 @@ impl OpenAIClient {
             .with(RetryTransientMiddleware::new_with_policy(retry))
             .build();
         let body = serde_json::to_string(&req)?;
-        println!("{}", body);
-        let mut events = client
-            .post(format!("{}{}", base_url, CHAT_COMPLETIONS_ENDPOINT))
-            .bearer_auth(api_key.clone())
-            .header("Content-Type", "application/json")
-            .body(body)
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes_stream()
-            .eventsource();
 
         let mut deltas: Vec<LLMStreamingDelta> = vec![];
         let mut response_id: Option<String> = None;
@@ -856,6 +844,32 @@ impl OpenAIClient {
         let mut indexed_tool_calls: BTreeMap<u32, StreamingCompletionToolCall> = BTreeMap::new();
 
         let s: LLMStream = Box::pin(stream! {
+            let first_response = client
+                .post(format!("{}{}", base_url, CHAT_COMPLETIONS_ENDPOINT))
+                .bearer_auth(api_key.clone())
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .await;
+            let mut events;
+            match first_response {
+                Ok(r) => {
+                    let with_error_for_status = r.error_for_status();
+                    match with_error_for_status {
+                        Ok(v) => {
+                            events = v.bytes_stream().eventsource();
+                        },
+                        Err(e) => {
+                            yield Err(e.into());
+                            return;
+                        }
+                    }
+                },
+                Err(e) => {
+                    yield Err(e.into());
+                    return;
+                }
+            }
             while let Some(ev) = events.next().await {
                 match ev {
                     Ok(event) => {

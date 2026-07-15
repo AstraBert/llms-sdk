@@ -96,30 +96,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
     let llm = LLM::default();
-    let mut tools = if let Some(tfs) = args.tool_file {
+    let tools = if let Some(tfs) = args.tool_file {
         let mut ts = vec![];
         for tf in tfs {
             ts.push(tool_from_file(tf)?);
         }
-        ts
+        Some(ts)
     } else {
-        vec![]
+        None
     };
     let mut request = LLMRequest::builder()
         .api_type(api_type)
         .api_key(api_key)
         .model(args.model)
-        .reasoning_effort(reasoning.unwrap_or_default())
         .stream(args.stream)
         .messages(vec![Message {
             role: llms_sdk::MessageRole::User,
             content: vec![MessagePart::Text(TextPart::new(args.prompt))],
         }])
         .build();
-    request
-        .tools
-        .get_or_insert_with(Vec::new)
-        .append(&mut tools);
+    if let Some(mut t) = tools {
+        request.tools.get_or_insert_with(Vec::new).append(&mut t);
+    }
+    if let Some(reason) = reasoning {
+        request.reasoning_effort = Some(reason);
+    }
     if let Some(fl) = args.json_schema_file {
         let schema = schema_from_file(fl)?;
         request.output_format = Some(schema);

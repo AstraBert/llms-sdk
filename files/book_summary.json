@@ -25,6 +25,7 @@
             "type": "null"
           }
         ],
+        "default": null,
         "description": "Year of publishing, if available",
         "title": "Year Published"
       }
