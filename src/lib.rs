@@ -1,3 +1,4 @@
+mod anthropic;
 mod errors;
 mod openai;
 mod types;
