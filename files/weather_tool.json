@@ -1,0 +1,18 @@
+{
+  "name":"weather_tool",
+  "description":"call this tool whenever asked about the weather",
+  "parameters":
+    {
+      "$schema":"https://json-schema.org/draft/2020-12/schema",
+      "title":"WeatherTool",
+      "type":"object",
+      "properties":
+        {
+          "location":
+            {
+              "type":"string"
+            }
+        },
+      "required":["location"]
+  }
+}

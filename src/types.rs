@@ -298,7 +298,7 @@ impl Display for ApiType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
     None,
@@ -311,7 +311,7 @@ pub enum ReasoningEffort {
 
 impl Default for ReasoningEffort {
     fn default() -> Self {
-        Self::Low
+        Self::None
     }
 }
 
@@ -390,7 +390,14 @@ impl Tool {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OutputFormat {
+    pub name: String,
+    pub description: String,
+    pub schema: Schema,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMRequest {
     pub api_type: ApiType,
     pub base_url: Option<String>,
@@ -403,7 +410,7 @@ pub struct LLMRequest {
     pub reasoning_effort: Option<ReasoningEffort>,
     pub prompt_cache_ttl: Option<String>,
     pub stream: bool,
-    pub output_format: Option<Schema>,
+    pub output_format: Option<OutputFormat>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
     pub parallel_tool_calls: bool,
@@ -421,7 +428,7 @@ pub struct LLMRequestBuilder {
     reasoning_effort: Option<ReasoningEffort>,
     prompt_cache_ttl: Option<String>,
     stream: bool,
-    output_format: Option<Schema>,
+    output_format: Option<OutputFormat>,
     tools: Option<Vec<Tool>>,
     tool_choice: Option<ToolChoice>,
     parallel_tool_calls: bool,
@@ -514,18 +521,44 @@ impl LLMRequestBuilder {
         self
     }
 
-    pub fn output_format<T: JsonSchema>(mut self) -> Self {
-        self.output_format = Some(schema_for!(T));
+    pub fn output_format<T: JsonSchema>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        self.output_format = Some(OutputFormat {
+            name: name.into(),
+            description: description.into(),
+            schema: schema_for!(T),
+        });
         self
     }
 
-    pub fn output_format_from_schema(mut self, schema: Schema) -> Self {
-        self.output_format = Some(schema);
+    pub fn output_format_from_schema(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        schema: Schema,
+    ) -> Self {
+        self.output_format = Some(OutputFormat {
+            name: name.into(),
+            description: description.into(),
+            schema,
+        });
         self
     }
 
-    pub fn output_format_from_value(mut self, value: impl Serialize) -> Self {
-        self.output_format = Some(schema_for_value!(value));
+    pub fn output_format_from_value(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        value: impl Serialize,
+    ) -> Self {
+        self.output_format = Some(OutputFormat {
+            name: name.into(),
+            description: description.into(),
+            schema: schema_for_value!(value),
+        });
         self
     }
 

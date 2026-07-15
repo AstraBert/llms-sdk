@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ApiType, AudioPart, CHAT_COMPLETIONS_ENDPOINT, ImagePart, LLMRequest, LLMResponse, LLMStream,
     LLMStreamingComplete, LLMStreamingDelta, LLMStreamingResponse, LLMToolDelta, LLMUsage, Message,
-    MessagePart, MessageRole, ReasoningEffort, RetryPolicy, TextPart, ToolCallPart, ToolChoice,
-    ToolResultPart,
+    MessagePart, MessageRole, OutputFormat, ReasoningEffort, RetryPolicy, TextPart, ToolCallPart,
+    ToolChoice, ToolResultPart,
     errors::{StreamParamError, UnsupportedPartType},
 };
 
@@ -456,7 +456,7 @@ impl Default for ResponseFormatType {
 pub struct ResponseFormat {
     #[serde(rename = "type")]
     format_type: ResponseFormatType,
-    json_schema: Schema,
+    json_schema: OutputFormat,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -501,7 +501,6 @@ pub struct OpenAIRequest {
     parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
-    store: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<OpenAIStreamOptions>,
 }
@@ -559,7 +558,6 @@ impl TryFrom<LLMRequest> for OpenAIRequest {
             reasoning_effort: value
                 .reasoning_effort
                 .map(|r| OpenAIReasoningEffort::from(r)),
-            store: true,
             stream_options,
         })
     }
@@ -839,6 +837,7 @@ impl OpenAIClient {
             .with(RetryTransientMiddleware::new_with_policy(retry))
             .build();
         let body = serde_json::to_string(&req)?;
+        println!("{}", body);
         let mut events = client
             .post(format!("{}{}", base_url, CHAT_COMPLETIONS_ENDPOINT))
             .bearer_auth(api_key.clone())

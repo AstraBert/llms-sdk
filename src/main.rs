@@ -1,10 +1,10 @@
-use std::str::FromStr;
+use std::{fs, str::FromStr};
 
 use clap::Parser;
 use futures_util::StreamExt;
-use llms_sdk::{ApiType, LLM, LLMRequest, Message, MessagePart, TextPart, Tool};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use llms_sdk::{
+    ApiType, LLM, LLMRequest, Message, MessagePart, OutputFormat, ReasoningEffort, TextPart, Tool,
+};
 
 #[derive(Debug, Parser)]
 #[command(version = "0.1.0")]
@@ -36,11 +36,35 @@ struct Args {
     /// Whether or not the response should be streamed.
     /// Defaults to false.
     stream: bool,
+    #[arg(long, short, default_value = None)]
+    /// Effort the model should put into
+    /// reasoning while responding to
+    /// the prompt.
+    /// Allowed values: 'none' (default),
+    /// 'minimal', 'low', 'medium', 'high',
+    /// 'maximum'
+    reasoning_effort: Option<String>,
+    #[arg(long, default_value = None)]
+    /// One or more JSON files containing tool
+    /// definitions that follow the shape required
+    /// by the Tool struct.
+    tool_file: Option<Vec<String>>,
+    #[arg(long, default_value = None)]
+    /// A JSON file containing the output
+    /// schema for the response.
+    json_schema_file: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-struct WeatherTool {
-    pub location: String,
+fn tool_from_file(fl: String) -> Result<Tool, Box<dyn std::error::Error>> {
+    let content = fs::read_to_string(fl)?;
+    let tool: Tool = serde_json::from_str(&content)?;
+    Ok(tool)
+}
+
+fn schema_from_file(fl: String) -> Result<OutputFormat, Box<dyn std::error::Error>> {
+    let content = fs::read_to_string(fl)?;
+    let schema: OutputFormat = serde_json::from_str(&content)?;
+    Ok(schema)
 }
 
 #[tokio::main]
@@ -67,21 +91,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     };
+    let reasoning = match args.reasoning_effort {
+        Some(r) => Some(ReasoningEffort::from_str(&r)?),
+        None => None,
+    };
     let llm = LLM::default();
-    let request = LLMRequest::builder()
+    let mut tools = if let Some(tfs) = args.tool_file {
+        let mut ts = vec![];
+        for tf in tfs {
+            ts.push(tool_from_file(tf)?);
+        }
+        ts
+    } else {
+        vec![]
+    };
+    let mut request = LLMRequest::builder()
         .api_type(api_type)
         .api_key(api_key)
         .model(args.model)
-        .add_tool(Tool::new::<WeatherTool>(
-            "weather_tool",
-            "call this tool whenever asked about the weather",
-        ))
+        .reasoning_effort(reasoning.unwrap_or_default())
         .stream(args.stream)
         .messages(vec![Message {
             role: llms_sdk::MessageRole::User,
             content: vec![MessagePart::Text(TextPart::new(args.prompt))],
         }])
         .build();
+    request
+        .tools
+        .get_or_insert_with(Vec::new)
+        .append(&mut tools);
+    if let Some(fl) = args.json_schema_file {
+        let schema = schema_from_file(fl)?;
+        request.output_format = Some(schema);
+    }
     if !args.stream {
         let response = llm.respond(request).await?;
         for p in response.message.content {

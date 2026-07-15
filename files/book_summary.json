@@ -1,0 +1,39 @@
+{
+  "name": "BookSummary",
+  "description": "A schema made for summarizing books",
+  "schema": {
+    "properties": {
+      "author": {
+        "description": "author of the book",
+        "title": "Author",
+        "type": "string"
+      },
+      "topics": {
+        "description": "list of 3-5 topics the book deals with",
+        "items": {
+          "type": "string"
+        },
+        "title": "Topics",
+        "type": "array"
+      },
+      "year_published": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Year of publishing, if available",
+        "title": "Year Published"
+      }
+    },
+    "required": [
+      "author",
+      "topics"
+    ],
+    "title": "BookSummary",
+    "type": "object"
+  }
+}
