@@ -425,6 +425,7 @@ pub enum OpenAIReasoningEffort {
     Medium,
     High,
     Xhigh,
+    Max,
 }
 
 impl From<ReasoningEffort> for OpenAIReasoningEffort {
@@ -435,7 +436,8 @@ impl From<ReasoningEffort> for OpenAIReasoningEffort {
             ReasoningEffort::Low => Self::Low,
             ReasoningEffort::High => Self::High,
             ReasoningEffort::Medium => Self::Medium,
-            ReasoningEffort::Maximum => Self::Xhigh,
+            ReasoningEffort::Maximum => Self::Max,
+            ReasoningEffort::Xhigh => Self::Xhigh,
         }
     }
 }

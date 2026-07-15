@@ -100,12 +100,14 @@ impl TextPart {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThinkingPart {
     pub thinking: String,
+    pub signature: String,
 }
 
 impl ThinkingPart {
-    pub fn new(thinking: impl Into<String>) -> Self {
+    pub fn new(thinking: impl Into<String>, signature: impl Into<String>) -> Self {
         Self {
             thinking: thinking.into(),
+            signature: signature.into(),
         }
     }
 }
@@ -306,12 +308,27 @@ pub enum ReasoningEffort {
     Low,
     Medium,
     High,
+    Xhigh,
     Maximum,
 }
 
 impl Default for ReasoningEffort {
     fn default() -> Self {
         Self::None
+    }
+}
+
+impl ToString for ReasoningEffort {
+    fn to_string(&self) -> String {
+        match self {
+            Self::None => "none".to_string(),
+            Self::Minimal => "minimal".to_string(),
+            Self::Low => "low".to_string(),
+            Self::Medium => "medium".to_string(),
+            Self::High => "high".to_string(),
+            Self::Maximum => "maximum".to_string(),
+            Self::Xhigh => "xhigh".to_string(),
+        }
     }
 }
 

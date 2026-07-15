@@ -61,3 +61,16 @@ impl Display for StreamParamError {
         write!(f, "{}", message)
     }
 }
+
+#[derive(Debug)]
+pub struct InvalidTtl {
+    pub ttl: String,
+}
+
+impl std::error::Error for InvalidTtl {}
+
+impl Display for InvalidTtl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "The requested TTL is not supported: {}", self.ttl)
+    }
+}

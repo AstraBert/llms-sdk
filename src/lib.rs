@@ -1,6 +1,6 @@
-mod anthropic;
-mod errors;
-mod openai;
+pub mod anthropic;
+pub mod errors;
+pub mod openai;
 mod types;
 
 pub use types::*;
