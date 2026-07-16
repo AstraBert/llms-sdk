@@ -4,10 +4,12 @@ use schemars::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ImagePart, MessageRole, ReasoningEffort, TextPart, ThinkingPart, Tool, ToolCallPart,
-    ToolResultPart,
-    errors::{InvalidTtl, UnsupportedType},
+    ApiType, DocumentPart, ImagePart, LLMRequest, LLMResponse, Message, MessagePart, MessageRole,
+    ReasoningEffort, TextPart, ThinkingPart, Tool, ToolCallPart, ToolChoice, ToolResultPart,
+    errors::{InvalidAntRequestConversion, InvalidTtl, UnsupportedPartType, UnsupportedType},
 };
+
+pub const DEFAULT_MAX_TOKENS: u32 = 128_000;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -161,11 +163,90 @@ impl From<ThinkingPart> for AntThinkingPart {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Base64PDFDocumentSource {
+    pub data: String,
+    pub media_type: String,
+    #[serde(rename = "type")]
+    pub source_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PlainTextDocumentSource {
+    pub data: String,
+    pub media_type: String,
+    #[serde(rename = "type")]
+    pub source_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UrlPdfDocumentSource {
+    pub url: String,
+    #[serde(rename = "type")]
+    pub source_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum DocumentSource {
+    Base64PDF(Base64PDFDocumentSource),
+    PlainText(PlainTextDocumentSource),
+    UrlPdf(UrlPdfDocumentSource),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AntDocumentPart {
+    pub source: DocumentSource,
+    #[serde(rename = "type")]
+    pub part_type: String,
+}
+
+impl From<DocumentPart> for AntDocumentPart {
+    fn from(value: DocumentPart) -> Self {
+        let (data, is_text, is_url) = match value.mime_type {
+            Some(m) => match m.as_str() {
+                "application/pdf" => (value.data, false, false),
+                "text/plain" => (value.data, true, false),
+                _ => unreachable!("This branch should not be reached"),
+            },
+            None => (value.data, false, true),
+        };
+        if is_url {
+            Self {
+                source: DocumentSource::UrlPdf(UrlPdfDocumentSource {
+                    url: data,
+                    source_type: "url".to_string(),
+                }),
+                part_type: "document".to_string(),
+            }
+        } else if is_text {
+            Self {
+                source: DocumentSource::PlainText(PlainTextDocumentSource {
+                    data,
+                    media_type: "text/plain".to_string(),
+                    source_type: "text".to_string(),
+                }),
+                part_type: "document".to_string(),
+            }
+        } else {
+            Self {
+                source: DocumentSource::Base64PDF(Base64PDFDocumentSource {
+                    data,
+                    media_type: "application/pdf".to_string(),
+                    source_type: "base64".to_string(),
+                }),
+                part_type: "document".to_string(),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum AntMessagePart {
     Text(AntTextPart),
     Thinking(AntThinkingPart),
     Image(AntImagePart),
+    Document(AntDocumentPart),
     ToolCall(AntToolCallPart),
     ToolResult(AntToolResultPart),
 }
@@ -176,9 +257,47 @@ pub struct AntMessage {
     content: Vec<AntMessagePart>,
 }
 
+impl TryFrom<Message> for AntMessage {
+    type Error = UnsupportedPartType;
+
+    fn try_from(value: Message) -> Result<Self, Self::Error> {
+        let role = AntMessageRole::from(value.role);
+        let mut content = vec![];
+        for p in value.content {
+            match p {
+                MessagePart::Text(t) => {
+                    content.push(AntMessagePart::Text(AntTextPart::from(t)));
+                }
+                MessagePart::Document(d) => {
+                    content.push(AntMessagePart::Document(AntDocumentPart::from(d)));
+                }
+                MessagePart::Thinking(t) => {
+                    content.push(AntMessagePart::Thinking(AntThinkingPart::from(t)));
+                }
+                MessagePart::Image(i) => {
+                    content.push(AntMessagePart::Image(AntImagePart::from(i)));
+                }
+                MessagePart::ToolCall(tc) => {
+                    content.push(AntMessagePart::ToolCall(AntToolCallPart::from(tc)));
+                }
+                MessagePart::ToolResult(tr) => {
+                    content.push(AntMessagePart::ToolResult(AntToolResultPart::from(tr)));
+                }
+                MessagePart::Audio(_) => {
+                    return Err(UnsupportedPartType {
+                        part_type: "audio".to_string(),
+                        api_type: ApiType::Anthropic.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(Self { role, content })
+    }
+}
+
 pub enum AllowedCacheTtl {
     FiveMinutes,
-    ThirtyMinutes,
+    OneHour,
 }
 
 impl FromStr for AllowedCacheTtl {
@@ -187,8 +306,17 @@ impl FromStr for AllowedCacheTtl {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "5m" => Ok(Self::FiveMinutes),
-            "30m" => Ok(Self::ThirtyMinutes),
+            "1h" => Ok(Self::OneHour),
             _ => Err(InvalidTtl { ttl: s.to_string() }),
+        }
+    }
+}
+
+impl ToString for AllowedCacheTtl {
+    fn to_string(&self) -> String {
+        match self {
+            Self::FiveMinutes => "5m".to_string(),
+            Self::OneHour => "1h".to_string(),
         }
     }
 }
@@ -221,7 +349,7 @@ pub enum AntToolChoice {
     None(AntNoneToolChoice),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum AntEffort {
     Low,
@@ -281,6 +409,26 @@ impl From<Tool> for AntTool {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AntThinkingConfigDisabled {
+    #[serde(rename = "type")]
+    config_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AntThinkingConfigAdaptive {
+    #[serde(rename = "type")]
+    config_type: String,
+    display: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum AntThinkingConfig {
+    Disabled(AntThinkingConfigDisabled),
+    Adaptive(AntThinkingConfigAdaptive),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AntRequest {
     pub model: String,
     pub messages: Vec<AntMessage>,
@@ -289,11 +437,169 @@ pub struct AntRequest {
     pub cache_control: Option<CacheControl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_config: Option<AntOutputConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<AntToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<AntTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<AntThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
 }
+
+impl TryFrom<LLMRequest> for AntRequest {
+    type Error = InvalidAntRequestConversion;
+
+    fn try_from(value: LLMRequest) -> Result<Self, Self::Error> {
+        let mut messages = vec![];
+        let mut system = None;
+        for m in value.messages {
+            let message = AntMessage::try_from(m)?;
+            match message.role {
+                AntMessageRole::System => {
+                    let mut text = String::new();
+                    for p in message.content {
+                        match p {
+                            AntMessagePart::Text(t) => text += &t.text,
+                            _ => continue,
+                        }
+                    }
+                    system = Some(text)
+                }
+                _ => messages.push(message),
+            }
+        }
+        let cache_control = match value.prompt_cache_ttl {
+            Some(p) => Some(CacheControl {
+                ttl: AllowedCacheTtl::from_str(&p)?.to_string(),
+                cache_type: "ephemeral".to_string(),
+            }),
+            None => None,
+        };
+        let mut tool_choice = None;
+        let tools: Option<Vec<AntTool>> = if let Some(ts) = value.tools
+            && !ts.is_empty()
+        {
+            tool_choice = value.tool_choice.map(|tc| match tc {
+                ToolChoice::Auto => AntToolChoice::Auto(AntAutoToolChoice {
+                    tool_choice_type: "auto".to_string(),
+                    disable_parallel_tool_use: !value.parallel_tool_calls,
+                }),
+                ToolChoice::Required => AntToolChoice::Any(AntAnyToolChoice {
+                    tool_choice_type: "any".to_string(),
+                    disable_parallel_tool_use: !value.parallel_tool_calls,
+                }),
+                ToolChoice::None => AntToolChoice::None(AntNoneToolChoice {
+                    tool_choice_type: "none".to_string(),
+                }),
+            });
+            Some(ts.iter().cloned().map(|t| AntTool::from(t)).collect())
+        } else {
+            None
+        };
+        let effort = if let Some(re) = value.reasoning_effort {
+            AntEffort::try_from(re).ok()
+        } else {
+            None
+        };
+        let output_format = value.output_format.map(|f| AntOutputFormat {
+            format_type: "json_schema".to_string(),
+            json_schema: f.schema,
+        });
+        let output_config = if output_format.is_some() || effort.is_some() {
+            Some(AntOutputConfig {
+                effort: effort,
+                format: output_format,
+            })
+        } else {
+            None
+        };
+        let thinking = effort.map_or(
+            AntThinkingConfig::Disabled(AntThinkingConfigDisabled {
+                config_type: "disabled".to_string(),
+            }),
+            |_| {
+                AntThinkingConfig::Adaptive(AntThinkingConfigAdaptive {
+                    config_type: "adaptive".to_string(),
+                    display: "summary".to_string(),
+                })
+            },
+        );
+        let top_p = if let Some(tp) = value.top_p {
+            if let Some(_) = value.temperature {
+                None
+            } else if matches!(thinking, AntThinkingConfig::Adaptive(_)) {
+                Some(0.95)
+            } else {
+                Some(tp)
+            }
+        } else {
+            None
+        };
+        let temperature = value.temperature.map(|p| {
+            if matches!(thinking, AntThinkingConfig::Adaptive(_)) {
+                1_f32
+            } else {
+                p
+            }
+        });
+        Ok(Self {
+            model: value.model,
+            max_tokens: value.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+            messages,
+            stream: value.stream,
+            cache_control,
+            tool_choice,
+            tools,
+            output_config,
+            thinking: Some(thinking),
+            temperature,
+            top_p,
+            system,
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub struct AntUsage {
+    pub input_tokens: u32,
+    pub cache_creation_input_tokens: u32,
+    pub cache_read_tokens: u32,
+    pub output_tokens: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AntResponse {
+    pub id: String,
+    pub content: Vec<AntMessagePart>,
+    pub usage: AntUsage,
+}
+
+// impl From<AntResponse> for LLMResponse {
+//     fn from(value: AntResponse) -> Self {
+//         let mut content = vec![];
+//         for c in value.content {
+//             let p = match c {
+//                 AntMessagePart::Text(t) => MessagePart::Text(t.into()),
+//                 AntMessagePart::Document(d) => MessagePart::Document(d.into()),
+//                 AntMessagePart::Thinking(t) => MessagePart::Thinking(t.into()),
+//                 AntMessagePart::ToolCall(tc) => MessagePart::ToolCall(tc.into()),
+//                 AntMessagePart::ToolResult(tr) => MessagePart::ToolResult(tr.into()),
+//                 AntMessagePart::Image(i) => MessagePart::Image(i.into()),
+//             };
+//             content.push(p);
+//         }
+//         Self {
+//             id: value.id,
+//             message: Message {
+//                 role: MessageRole::Assistant,
+//                 content: (),
+//             },
+//         }
+//     }
+// }

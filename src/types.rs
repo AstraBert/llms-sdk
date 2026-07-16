@@ -23,6 +23,7 @@ pub const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
 pub const CHAT_COMPLETIONS_ENDPOINT: &str = "/chat/completions";
 pub const MESSAGES_ENDPOINT: &str = "/messages";
 pub const ALLOWED_AUDIO_TYPES: &[&str] = &["audio/wav", "audio/mp3"];
+pub const ALLOWED_DOCUMENT_TYPES: &[&str] = &["application/pdf", "text/plain"];
 pub const ALLOWED_IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -240,6 +241,93 @@ impl AudioPart {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentPart {
+    pub data: String,
+    pub mime_type: Option<String>,
+    pub is_base64: bool,
+}
+
+impl DocumentPart {
+    pub fn new(
+        data: impl Into<String>,
+        mime_type: impl Into<String>,
+    ) -> Result<Self, InvalidInput> {
+        let media_type = mime_type.into();
+        if !ALLOWED_DOCUMENT_TYPES.contains(&media_type.as_str()) {
+            return Err(InvalidInput {
+                reason: format!(
+                    "Unsupported document type: {}. The supported document types are: {}",
+                    media_type,
+                    ALLOWED_DOCUMENT_TYPES.join(", ")
+                ),
+            });
+        }
+        Ok(Self {
+            data: data.into(),
+            is_base64: media_type == "application/pdf",
+            mime_type: Some(media_type),
+        })
+    }
+
+    pub fn try_from_pdf_bytes(data: Vec<u8>) -> Result<Self, InvalidInput> {
+        let kind = file_format::FileFormat::from_bytes(&data);
+        if kind.media_type() != "application/pdf" {
+            return Err(InvalidInput {
+                reason: format!(
+                    "The bytes do not appear to belong to a PDF. Inferred file format: {}",
+                    kind.media_type(),
+                ),
+            });
+        }
+        let b64 = BASE64_STANDARD.encode(data);
+        Ok(Self {
+            data: b64,
+            mime_type: Some("application/pdf".to_string()),
+            is_base64: true,
+        })
+    }
+
+    #[cfg(feature = "fs")]
+    pub fn try_from_text_file(file: String) -> Result<Self, io::Error> {
+        let content = fs::read_to_string(file)?;
+        Ok(Self {
+            data: content,
+            mime_type: Some("text/plain".to_string()),
+            is_base64: false,
+        })
+    }
+
+    #[cfg(feature = "fs")]
+    pub fn try_from_pdf_file(file: String) -> Result<Self, io::Error> {
+        let data = fs::read(file)?;
+        let kind = file_format::FileFormat::from_bytes(&data);
+        if kind.media_type() != "application/pdf" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "The bytes do not appear to belong to a PDF. Inferred file format: {}",
+                    kind.media_type(),
+                ),
+            ));
+        }
+        let b64 = BASE64_STANDARD.encode(data);
+        Ok(Self {
+            data: b64,
+            mime_type: Some("application/pdf".to_string()),
+            is_base64: true,
+        })
+    }
+
+    pub fn from_url(url: String) -> Self {
+        Self {
+            data: url,
+            mime_type: None,
+            is_base64: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallPart {
     pub id: String,
     pub name: String,
@@ -259,6 +347,7 @@ pub enum MessagePart {
     Text(TextPart),
     Image(ImagePart),
     Audio(AudioPart),
+    Document(DocumentPart),
     Thinking(ThinkingPart),
     ToolCall(ToolCallPart),
     ToolResult(ToolResultPart),

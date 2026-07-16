@@ -74,3 +74,36 @@ impl Display for InvalidTtl {
         write!(f, "The requested TTL is not supported: {}", self.ttl)
     }
 }
+
+#[derive(Debug)]
+pub struct InvalidAntRequestConversion {
+    pub reason: String,
+}
+
+impl std::error::Error for InvalidAntRequestConversion {}
+
+impl Display for InvalidAntRequestConversion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Unable to convert request to Anthropic request: {}",
+            self.reason
+        )
+    }
+}
+
+impl From<InvalidTtl> for InvalidAntRequestConversion {
+    fn from(value: InvalidTtl) -> Self {
+        Self {
+            reason: format!("{}", value),
+        }
+    }
+}
+
+impl From<UnsupportedPartType> for InvalidAntRequestConversion {
+    fn from(value: UnsupportedPartType) -> Self {
+        Self {
+            reason: format!("{}", value),
+        }
+    }
+}

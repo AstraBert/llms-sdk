@@ -161,6 +161,10 @@ impl TryFrom<MessagePart> for OpenAIMessagePart {
                 tool_call_id: tr.tool_call_id,
                 content: tr.result,
             })),
+            MessagePart::Document(_) => Err(UnsupportedPartType {
+                part_type: "document".to_string(),
+                api_type: ApiType::OpenAI.to_string(),
+            }),
             _ => Err(UnsupportedPartType {
                 part_type: "unknown".to_string(),
                 api_type: ApiType::OpenAI.to_string(),
