@@ -5,7 +5,7 @@ mod types;
 
 pub use types::*;
 
-use crate::openai::OpenAIClient;
+use crate::{anthropic::AntClient, openai::OpenAIClient};
 
 #[derive(Debug, Default)]
 pub struct LLM {
@@ -27,7 +27,11 @@ impl LLM {
                 let response = openai_client.respond(request).await?;
                 Ok(response)
             }
-            ApiType::Anthropic => Err("Not yet implemented".into()),
+            ApiType::Anthropic => {
+                let ant_client = AntClient::new(self.retry_policy);
+                let response = ant_client.respond(request).await?;
+                Ok(response)
+            }
         }
     }
     pub async fn stream_response(

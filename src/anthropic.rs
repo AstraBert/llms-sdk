@@ -1,12 +1,18 @@
 use std::str::FromStr;
 
+use reqwest_middleware::ClientBuilder;
+use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ApiType, DocumentPart, ImagePart, LLMRequest, LLMResponse, Message, MessagePart, MessageRole,
-    ReasoningEffort, TextPart, ThinkingPart, Tool, ToolCallPart, ToolChoice, ToolResultPart,
-    errors::{InvalidAntRequestConversion, InvalidTtl, UnsupportedPartType, UnsupportedType},
+    ApiType, DocumentPart, ImagePart, LLMRequest, LLMResponse, LLMUsage, MESSAGES_ENDPOINT,
+    Message, MessagePart, MessageRole, ReasoningEffort, RetryPolicy, TextPart, ThinkingPart, Tool,
+    ToolCallPart, ToolChoice, ToolResultPart,
+    errors::{
+        InvalidAntRequestConversion, InvalidTtl, StreamParamError, UnsupportedPartType,
+        UnsupportedType,
+    },
 };
 
 pub const DEFAULT_MAX_TOKENS: u32 = 128_000;
@@ -249,6 +255,51 @@ pub enum AntMessagePart {
     Document(AntDocumentPart),
     ToolCall(AntToolCallPart),
     ToolResult(AntToolResultPart),
+}
+
+impl Into<MessagePart> for AntMessagePart {
+    fn into(self) -> MessagePart {
+        match self {
+            Self::Text(t) => MessagePart::Text(TextPart { text: t.text }),
+            Self::Document(d) => {
+                let (data, is_base64, mime_type) = match d.source {
+                    DocumentSource::Base64PDF(b) => (b.data, true, Some(b.media_type)),
+                    DocumentSource::UrlPdf(u) => (u.url, false, None),
+                    DocumentSource::PlainText(t) => (t.data, false, Some(t.media_type)),
+                };
+                MessagePart::Document(DocumentPart {
+                    data,
+                    mime_type,
+                    is_base64,
+                })
+            }
+            Self::Image(i) => {
+                let (data, is_base64, mime_type) = match i.source {
+                    ImageSource::Base64(b) => (b.data, true, Some(b.media_type)),
+                    ImageSource::URL(u) => (u.url, false, None),
+                };
+                MessagePart::Image(ImagePart {
+                    data,
+                    is_base64,
+                    mime_type,
+                })
+            }
+            Self::Thinking(t) => MessagePart::Thinking(ThinkingPart {
+                thinking: t.thinking,
+                signature: t.signature,
+            }),
+            Self::ToolCall(tc) => MessagePart::ToolCall(ToolCallPart {
+                id: tc.id,
+                name: tc.name,
+                arguments: serde_json::to_string(&tc.input)
+                    .expect("Tool input should be serializable"),
+            }),
+            Self::ToolResult(tr) => MessagePart::ToolResult(ToolResultPart {
+                tool_call_id: tr.tool_use_id,
+                result: tr.content,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -569,8 +620,20 @@ impl TryFrom<LLMRequest> for AntRequest {
 pub struct AntUsage {
     pub input_tokens: u32,
     pub cache_creation_input_tokens: u32,
-    pub cache_read_tokens: u32,
+    pub cache_read_input_tokens: u32,
     pub output_tokens: u32,
+}
+
+impl From<AntUsage> for LLMUsage {
+    fn from(value: AntUsage) -> Self {
+        Self {
+            input_tokens: value.input_tokens,
+            cache_read_tokens: Some(value.cache_read_input_tokens),
+            cache_write_tokens: Some(value.cache_creation_input_tokens),
+            output_tokens: value.output_tokens,
+            other_tokens: None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -580,26 +643,70 @@ pub struct AntResponse {
     pub usage: AntUsage,
 }
 
-// impl From<AntResponse> for LLMResponse {
-//     fn from(value: AntResponse) -> Self {
-//         let mut content = vec![];
-//         for c in value.content {
-//             let p = match c {
-//                 AntMessagePart::Text(t) => MessagePart::Text(t.into()),
-//                 AntMessagePart::Document(d) => MessagePart::Document(d.into()),
-//                 AntMessagePart::Thinking(t) => MessagePart::Thinking(t.into()),
-//                 AntMessagePart::ToolCall(tc) => MessagePart::ToolCall(tc.into()),
-//                 AntMessagePart::ToolResult(tr) => MessagePart::ToolResult(tr.into()),
-//                 AntMessagePart::Image(i) => MessagePart::Image(i.into()),
-//             };
-//             content.push(p);
-//         }
-//         Self {
-//             id: value.id,
-//             message: Message {
-//                 role: MessageRole::Assistant,
-//                 content: (),
-//             },
-//         }
-//     }
-// }
+impl From<AntResponse> for LLMResponse {
+    fn from(value: AntResponse) -> Self {
+        let mut content: Vec<MessagePart> = vec![];
+        for c in value.content {
+            content.push(c.into());
+        }
+        Self {
+            id: value.id,
+            message: Message {
+                role: MessageRole::Assistant,
+                content,
+            },
+            created_at: None,
+            usage: LLMUsage::from(value.usage),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AntClient {
+    pub retry_policy: RetryPolicy,
+}
+
+impl AntClient {
+    pub fn new(retry_policy: RetryPolicy) -> Self {
+        Self { retry_policy }
+    }
+
+    pub async fn respond(
+        &self,
+        request: LLMRequest,
+    ) -> Result<LLMResponse, Box<dyn std::error::Error>> {
+        let base_url = request.base_url.clone().unwrap();
+        let api_key = request.api_key.clone();
+        if request.stream {
+            return Err(StreamParamError {
+                should_stream: false,
+            }
+            .into());
+        }
+        let req = AntRequest::try_from(request)?;
+        let retry = ExponentialBackoff::builder()
+            .base(self.retry_policy.base)
+            .jitter(self.retry_policy.jitter)
+            .retry_bounds(
+                self.retry_policy.min_retry_interval,
+                self.retry_policy.max_retry_interval,
+            )
+            .build_with_max_retries(self.retry_policy.max_retries);
+        let client = ClientBuilder::new(reqwest::Client::new())
+            .with(RetryTransientMiddleware::new_with_policy(retry))
+            .build();
+        let body = serde_json::to_string(&req)?;
+        let response = client
+            .post(format!("{}{}", base_url, MESSAGES_ENDPOINT))
+            .header("X-Api-Key", api_key)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<AntResponse>()
+            .await?;
+
+        Ok(LLMResponse::from(response))
+    }
+}

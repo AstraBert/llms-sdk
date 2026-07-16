@@ -58,10 +58,15 @@ impl From<TextPart> for OpenAITextPart {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpenAIImageUrl {
+    pub url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OpenAIImagePart {
     #[serde(rename = "type")]
     pub part_type: String,
-    pub image_url: String,
+    pub image_url: OpenAIImageUrl,
 }
 
 impl From<ImagePart> for OpenAIImagePart {
@@ -77,7 +82,7 @@ impl From<ImagePart> for OpenAIImagePart {
         };
         Self {
             part_type: "image_url".to_string(),
-            image_url,
+            image_url: OpenAIImageUrl { url: image_url },
         }
     }
 }
@@ -101,7 +106,13 @@ impl From<AudioPart> for OpenAIAudioPart {
             part_type: "input_audio".to_string(),
             input_audio: OpenAIInputAudio {
                 data: value.data,
-                format: value.mime_type,
+                format: {
+                    match value.mime_type.as_str() {
+                        "audio/mpeg" | "audio/mp3" => "mp3".to_string(),
+                        "audio/wav" | "audio/vnd.wav" | "audio/vnd.wave" => "wav".to_string(),
+                        _ => unreachable!("This branch should not be reached"),
+                    }
+                },
             },
         }
     }
@@ -307,24 +318,26 @@ impl Into<Message> for OpenAIMessage {
                         OpenAIMessagePart::Audio(a) => {
                             content.push(MessagePart::Audio(AudioPart {
                                 data: a.input_audio.data,
-                                mime_type: a.input_audio.format,
+                                mime_type: format!("audio/{}", a.input_audio.format),
                             }))
                         }
                         OpenAIMessagePart::Image(i) => {
-                            let (is_base64, mime_type, data) = if i.image_url.starts_with("data:") {
-                                let (split, data) = i
-                                    .image_url
-                                    .split_once(";")
-                                    .expect("Should return a clean split around ';'");
-                                let format = split.replace("data:", "").trim().to_owned();
-                                (
-                                    true,
-                                    Some(format),
-                                    data.replacen("base64,", "", 1).to_owned(),
-                                )
-                            } else {
-                                (false, None, i.image_url)
-                            };
+                            let (is_base64, mime_type, data) =
+                                if i.image_url.url.starts_with("data:") {
+                                    let (split, data) = i
+                                        .image_url
+                                        .url
+                                        .split_once(";")
+                                        .expect("Should return a clean split around ';'");
+                                    let format = split.replace("data:", "").trim().to_owned();
+                                    (
+                                        true,
+                                        Some(format),
+                                        data.replacen("base64,", "", 1).to_owned(),
+                                    )
+                                } else {
+                                    (false, None, i.image_url.url)
+                                };
                             content.push(MessagePart::Image(ImagePart {
                                 data,
                                 is_base64,
@@ -842,7 +855,7 @@ impl OpenAIClient {
             .with(RetryTransientMiddleware::new_with_policy(retry))
             .build();
         let body = serde_json::to_string(&req)?;
-
+        println!("{}", serde_json::to_string_pretty(&req)?);
         let mut deltas: Vec<LLMStreamingDelta> = vec![];
         let mut response_id: Option<String> = None;
         let mut first_created: Option<u64> = None;

@@ -27,4 +27,4 @@ cli = ["dep:clap", "dep:tokio"]
 [[bin]]
 name = "llms"
 path = "src/main.rs"
-required-features = ["cli"]
+required-features = ["cli", "fs"]

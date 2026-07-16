@@ -1,9 +1,10 @@
-use std::{fs, str::FromStr};
+use std::{fs, str::FromStr, vec};
 
 use clap::Parser;
 use futures_util::StreamExt;
 use llms_sdk::{
-    ApiType, LLM, LLMRequest, Message, MessagePart, OutputFormat, ReasoningEffort, TextPart, Tool,
+    ApiType, AudioPart, DocumentPart, ImagePart, LLM, LLMRequest, Message, MessagePart,
+    OutputFormat, ReasoningEffort, TextPart, Tool,
 };
 
 #[derive(Debug, Parser)]
@@ -53,6 +54,15 @@ struct Args {
     /// A JSON file containing the output
     /// schema for the response.
     json_schema_file: Option<String>,
+    #[arg(long, default_value = None)]
+    /// Image file for vision-related tasks. Use only one between image, PDF and audio input
+    image_file: Option<String>,
+    #[arg(long, default_value = None)]
+    /// Audio file for sound-processing tasks. Use only one between image, PDF and audio input
+    audio_file: Option<String>,
+    #[arg(long, default_value = None)]
+    /// PDF file for document understanding tasks. Use only one between image, PDF and audio input
+    pdf_file: Option<String>,
 }
 
 fn tool_from_file(fl: String) -> Result<Tool, Box<dyn std::error::Error>> {
@@ -105,6 +115,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    let mut content: Vec<MessagePart> = vec![];
+    content.push(MessagePart::Text(TextPart { text: args.prompt }));
+    if let Some(ig) = args.image_file {
+        let part = ImagePart::try_from_file(ig)?;
+        content.push(MessagePart::Image(part));
+    } else if let Some(au) = args.audio_file {
+        let part = AudioPart::try_from_file(au)?;
+        content.push(MessagePart::Audio(part));
+    } else if let Some(pdf) = args.pdf_file {
+        let part = DocumentPart::try_from_pdf_file(pdf)?;
+        content.push(MessagePart::Document(part));
+    }
     let mut request = LLMRequest::builder()
         .api_type(api_type)
         .api_key(api_key)
@@ -112,9 +134,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .stream(args.stream)
         .messages(vec![Message {
             role: llms_sdk::MessageRole::User,
-            content: vec![MessagePart::Text(TextPart::new(args.prompt))],
+            content,
         }])
         .build();
+    if let Some(bu) = args.base_url {
+        request.base_url = Some(bu);
+    }
     if let Some(mut t) = tools {
         request.tools.get_or_insert_with(Vec::new).append(&mut t);
     }

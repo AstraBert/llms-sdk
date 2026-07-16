@@ -22,7 +22,13 @@ pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
 pub const CHAT_COMPLETIONS_ENDPOINT: &str = "/chat/completions";
 pub const MESSAGES_ENDPOINT: &str = "/messages";
-pub const ALLOWED_AUDIO_TYPES: &[&str] = &["audio/wav", "audio/mp3"];
+pub const ALLOWED_AUDIO_TYPES: &[&str] = &[
+    "audio/wav",
+    "audio/mp3",
+    "audio/mpeg",
+    "audio/vnd.wav",
+    "audio/vnd.wave",
+];
 pub const ALLOWED_DOCUMENT_TYPES: &[&str] = &["application/pdf", "text/plain"];
 pub const ALLOWED_IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
