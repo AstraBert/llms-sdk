@@ -158,6 +158,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 MessagePart::Thinking(t) => {
                     println!("\x1b[38;5;247mThinking: {}\x1b[0m", t.thinking)
                 }
+                MessagePart::ToolCall(t) => {
+                    println!("{}", t.arguments)
+                }
                 // Should not produce anything apart from text and thinking
                 _ => continue,
             }
@@ -172,6 +175,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 llms_sdk::LLMStreamingResponse::ToolDelta(tc) => {
                     print!("{}", tc.partial_arguments)
+                }
+                llms_sdk::LLMStreamingResponse::ThinkingDelta(td) => {
+                    print!("\n\n\x1b[38;5;247m{}\x1b[0m", td.delta.unwrap_or_default())
                 }
                 llms_sdk::LLMStreamingResponse::Complete(c) => println!(
                     "\n\n\x1b[38;5;247mInput Tokens: {:?}; Output Tokens: {:?}; Tool Calls: {:?}",

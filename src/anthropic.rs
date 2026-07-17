@@ -1,18 +1,24 @@
-use std::str::FromStr;
+use futures_util::StreamExt;
+use std::{collections::BTreeMap, str::FromStr};
 
+use async_stream::stream;
+use eventsource_stream::Eventsource;
 use reqwest_middleware::ClientBuilder;
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ApiType, DocumentPart, ImagePart, LLMRequest, LLMResponse, LLMUsage, MESSAGES_ENDPOINT,
-    Message, MessagePart, MessageRole, ReasoningEffort, RetryPolicy, TextPart, ThinkingPart, Tool,
-    ToolCallPart, ToolChoice, ToolResultPart,
+    ApiType, DocumentPart, ImagePart, LLMRequest, LLMResponse, LLMStream, LLMStreamingComplete,
+    LLMStreamingDelta, LLMStreamingResponse, LLMThinkingDelta, LLMToolDelta, LLMUsage,
+    MESSAGES_ENDPOINT, Message, MessagePart, MessageRole, ReasoningEffort, RetryPolicy, TextPart,
+    ThinkingPart, Tool, ToolCallPart, ToolChoice, ToolResultPart,
     errors::{
         InvalidAntRequestConversion, InvalidTtl, StreamParamError, UnsupportedPartType,
         UnsupportedType,
     },
+    is_valid_json,
+    openai::StreamingCompletionToolCall,
 };
 
 pub const DEFAULT_MAX_TOKENS: u32 = 128_000;
@@ -132,6 +138,16 @@ impl From<ToolCallPart> for AntToolCallPart {
     }
 }
 
+impl Into<ToolCallPart> for AntToolCallPart {
+    fn into(self) -> ToolCallPart {
+        ToolCallPart {
+            id: self.id,
+            name: self.name,
+            arguments: serde_json::to_string(&self.input).expect("Should be serializable"),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AntToolResultPart {
     pub tool_use_id: String,
@@ -153,7 +169,8 @@ impl From<ToolResultPart> for AntToolResultPart {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AntThinkingPart {
     pub thinking: String,
-    pub signature: String,
+    #[serde(default)]
+    pub signature: Option<String>,
     #[serde(rename = "type")]
     pub part_type: String,
 }
@@ -431,7 +448,7 @@ impl TryFrom<ReasoningEffort> for AntEffort {
 pub struct AntOutputFormat {
     #[serde(rename = "type")]
     format_type: String,
-    json_schema: Schema,
+    schema: Schema,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -560,7 +577,21 @@ impl TryFrom<LLMRequest> for AntRequest {
         };
         let output_format = value.output_format.map(|f| AntOutputFormat {
             format_type: "json_schema".to_string(),
-            json_schema: f.schema,
+            schema: {
+                if f.schema
+                    .get("additionalProperties")
+                    .is_none_or(|f| f.as_bool().is_some_and(|o| o))
+                {
+                    let mut schema = f.schema;
+                    schema.insert(
+                        "additionalProperties".to_string(),
+                        serde_json::Value::from(false),
+                    );
+                    schema
+                } else {
+                    f.schema
+                }
+            },
         });
         let output_config = if output_format.is_some() || effort.is_some() {
             Some(AntOutputConfig {
@@ -577,7 +608,7 @@ impl TryFrom<LLMRequest> for AntRequest {
             |_| {
                 AntThinkingConfig::Adaptive(AntThinkingConfigAdaptive {
                     config_type: "adaptive".to_string(),
-                    display: "summary".to_string(),
+                    display: "summarized".to_string(),
                 })
             },
         );
@@ -661,6 +692,143 @@ impl From<AntResponse> for LLMResponse {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamEventType {
+    MessageStart,
+    ContentBlockStart,
+    ContentBlockDelta,
+    ContentBlockStop,
+    MessageDelta,
+    MessageStop,
+    Ping,
+    Error,
+}
+
+impl FromStr for StreamEventType {
+    type Err = UnsupportedType;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "message_start" => Ok(Self::MessageStart),
+            "message_delta" => Ok(Self::MessageDelta),
+            "message_stop" => Ok(Self::MessageStop),
+            "content_block_start" => Ok(Self::ContentBlockStart),
+            "content_block_delta" => Ok(Self::ContentBlockDelta),
+            "content_block_stop" => Ok(Self::ContentBlockStop),
+            "error" => Ok(Self::Error),
+            "ping" => Ok(Self::Ping),
+            _ => Err(UnsupportedType {
+                unsupported_type: s.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamTextDelta {
+    #[serde(rename = "type")]
+    pub delta_type: String,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamToolDelta {
+    #[serde(rename = "type")]
+    pub delta_type: String,
+    pub partial_json: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamThinkingDelta {
+    #[serde(rename = "type")]
+    pub delta_type: String,
+    pub thinking: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamThinkingSignatureDelta {
+    #[serde(rename = "type")]
+    pub delta_type: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamTextBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub index: u32,
+    pub delta: StreamTextDelta,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamToolBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub index: u32,
+    pub delta: StreamToolDelta,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamThinkingBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub index: u32,
+    pub delta: StreamThinkingDelta,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamThinkingSignatureBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub index: u32,
+    pub delta: StreamThinkingSignatureDelta,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum StreamContentBlock {
+    Text(StreamTextBlock),
+    Tool(StreamToolBlock),
+    Thinking(StreamThinkingBlock),
+    ThinkingSignature(StreamThinkingSignatureBlock),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamContentStart {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub content_block: AntMessagePart,
+    pub index: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamContentStop {
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub index: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamError {
+    #[serde(rename = "type")]
+    pub error_type: String,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamMessageStart {
+    #[serde(rename = "type")]
+    message_type: String,
+    message: AntResponse,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamMessageDelta {
+    #[serde(rename = "type")]
+    message_type: String,
+    usage: AntUsage,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AntClient {
     pub retry_policy: RetryPolicy,
@@ -699,14 +867,233 @@ impl AntClient {
         let response = client
             .post(format!("{}{}", base_url, MESSAGES_ENDPOINT))
             .header("X-Api-Key", api_key)
+            .header("anthropic-version", "2023-06-01")
             .header("Content-Type", "application/json")
             .body(body)
             .send()
-            .await?
-            .error_for_status()?
-            .json::<AntResponse>()
             .await?;
 
-        Ok(LLMResponse::from(response))
+        let status = response.status();
+        let text = response.text().await?;
+
+        if !status.is_success() {
+            // now you have the actual error body from the API
+            return Err(format!("API error {}: {}", status, text).into());
+        }
+
+        let parsed: AntResponse = serde_json::from_str(&text)?;
+
+        Ok(LLMResponse::from(parsed))
+    }
+
+    pub async fn stream_response(
+        &self,
+        request: LLMRequest,
+    ) -> Result<LLMStream, Box<dyn std::error::Error>> {
+        let base_url = request.base_url.clone().unwrap();
+        let api_key = request.api_key.clone();
+        if !request.stream {
+            return Err(StreamParamError {
+                should_stream: true,
+            }
+            .into());
+        }
+        let req = AntRequest::try_from(request)?;
+        let retry = ExponentialBackoff::builder()
+            .base(self.retry_policy.base)
+            .jitter(self.retry_policy.jitter)
+            .retry_bounds(
+                self.retry_policy.min_retry_interval,
+                self.retry_policy.max_retry_interval,
+            )
+            .build_with_max_retries(self.retry_policy.max_retries);
+        let client = ClientBuilder::new(reqwest::Client::new())
+            .with(RetryTransientMiddleware::new_with_policy(retry))
+            .build();
+        let body = serde_json::to_string(&req)?;
+
+        let mut deltas: Vec<LLMStreamingDelta> = vec![];
+        let mut thinking_deltas: Vec<LLMThinkingDelta> = vec![];
+        let mut response_id: Option<String> = None;
+        let mut resp_usage: Option<LLMUsage> = None;
+        let mut indexed_tool_calls: BTreeMap<u32, ToolCallPart> = BTreeMap::new();
+
+        let s: LLMStream = Box::pin(stream! {
+            let response_result = client
+                .post(format!("{}{}", base_url, MESSAGES_ENDPOINT))
+                .header("X-Api-Key", api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .await;
+
+            let mut events;
+
+            match response_result {
+                Ok(response) => {
+                    let status = response.status();
+                    if !status.is_success() {
+                        // only now consume the body, as text, for the error message
+                        let text = response.text().await.unwrap_or_default();
+                        yield Err(format!("API error {}: {}", status, text).into());
+                        return;
+                    }
+                    events = response.bytes_stream().eventsource();
+                },
+                Err(e) => {
+                    yield Err(e.into());
+                    return;
+                }
+            }
+
+            while let Some(ev) = events.next().await {
+                match ev {
+                    Err(e) => {
+                        yield Err(e.into());
+                        return;
+                    }
+                    Ok(event) => {
+                        let event_type;
+                        let event_result = StreamEventType::from_str(&event.event);
+                        match event_result {
+                            Err(e) => {
+                                yield Err(e.into());
+                                return;
+                            },
+                            Ok(t) => {
+                                event_type = t;
+                            }
+                        }
+                        match event_type {
+                            StreamEventType::MessageStart => {
+                                let res: Result<StreamMessageStart, serde_json::Error> = serde_json::from_str(&event.data);
+                                match res {
+                                    Err(e) => {
+                                        yield Err(e.into());
+                                        return;
+                                    }
+                                    Ok(m) => {
+                                        response_id = Some(m.message.id)
+                                    }
+                                }
+                            },
+                            StreamEventType::MessageDelta => {
+                                let res: Result<StreamMessageDelta, serde_json::Error> = serde_json::from_str(&event.data);
+                                match res {
+                                    Err(e) => {
+                                        yield Err(e.into());
+                                        return;
+                                    }
+                                    Ok(m) => {
+                                        resp_usage = Some(LLMUsage::from(m.usage))
+                                    }
+                                }
+                            },
+                            StreamEventType::MessageStop => {
+                                let mut tool_calls = None;
+                                if !indexed_tool_calls.is_empty() {
+                                    for (_, tc) in indexed_tool_calls.clone() {
+                                        if !is_valid_json(&tc.arguments) {
+                                            continue;
+                                        }
+                                        tool_calls.get_or_insert_with(Vec::new).push(tc);
+                                    }
+                                }
+                                yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete {
+                                    id: response_id.clone().expect("response ID should be known by now"),
+                                    created_at: None,
+                                    thinking_deltas: Some(thinking_deltas.clone()),
+                                    deltas: deltas.clone(),
+                                    tool_calls,
+                                    usage: resp_usage.clone(),
+                                }));
+                                break;
+                            },
+                            StreamEventType::Error => {
+                                let res: Result<StreamError, serde_json::Error> = serde_json::from_str(&event.data);
+                                match res {
+                                    Err(e) => {
+                                        yield Err(e.into());
+                                        return;
+                                    }
+                                    Ok(m) => {
+                                        yield Err(m.error.into());
+                                        return;
+                                    }
+                                }
+                            },
+                            StreamEventType::Ping => {
+                                continue;
+                            },
+                            StreamEventType::ContentBlockStart => {
+                                let res: Result<StreamContentStart, serde_json::Error> = serde_json::from_str(&event.data);
+                                match res {
+                                    Err(e) => {
+                                        yield Err(e.into());
+                                        return;
+                                    }
+                                    Ok(st) => {
+                                        match st.content_block {
+                                            AntMessagePart::ToolCall(tc) => {
+                                                indexed_tool_calls.insert(st.index, tc.into());
+                                            },
+                                            _ => continue,
+                                        }
+                                    }
+                                }
+                            },
+                            StreamEventType::ContentBlockDelta => {
+                                let res: Result<StreamContentBlock, serde_json::Error> = serde_json::from_str(&event.data);
+                                match res {
+                                    Err(e) => {
+                                        yield Err(e.into());
+                                        return;
+                                    }
+                                    Ok(c) => {
+                                        match c {
+                                            StreamContentBlock::Text(t) => {
+                                                let stream_delta = LLMStreamingDelta {
+                                                    response_id: response_id.clone().expect("Response ID should be set by now"),
+                                                    created_at: None,
+                                                    delta: Some(t.delta.text),
+                                                    stop: false,
+                                                };
+                                                deltas.push(stream_delta.clone());
+                                                yield Ok(LLMStreamingResponse::Delta(stream_delta));
+                                            }
+                                            StreamContentBlock::Thinking(t) => {
+                                                let thinking_delta = LLMThinkingDelta {
+                                                    response_id: response_id.clone().expect("Response ID should be set by now"),
+                                                    created_at: None,
+                                                    delta: Some(t.delta.thinking),
+                                                };
+                                                thinking_deltas.push(thinking_delta.clone());
+                                                yield Ok(LLMStreamingResponse::ThinkingDelta(thinking_delta));
+                                            },
+                                            StreamContentBlock::Tool(t) => {
+                                                indexed_tool_calls.entry(t.index).and_modify(|e| e.arguments += &t.delta.partial_json);
+                                                let tool_call = indexed_tool_calls.get(&t.index).expect("Tool call should have been registered by now");
+                                                let tool_delta = LLMToolDelta {
+                                                    tool_call_id: tool_call.id.clone(),
+                                                    partial_arguments: t.delta.partial_json,
+                                                    name: tool_call.name.clone(),
+                                                };
+                                                yield Ok(LLMStreamingResponse::ToolDelta(tool_delta))
+                                            },
+                                            StreamContentBlock::ThinkingSignature(_) => continue
+                                        }
+                                    }
+                                }
+
+                            },
+                            StreamEventType::ContentBlockStop => continue
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(s)
     }
 }

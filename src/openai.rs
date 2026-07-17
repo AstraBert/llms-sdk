@@ -14,6 +14,7 @@ use crate::{
     MessagePart, MessageRole, OutputFormat, ReasoningEffort, RetryPolicy, TextPart, ToolCallPart,
     ToolChoice, ToolResultPart,
     errors::{StreamParamError, UnsupportedPartType},
+    is_valid_json,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -774,18 +775,6 @@ fn deltas_to_message(deltas: &[LLMStreamingDelta]) -> Message {
     }
 }
 
-/// Parse a JSON string that may be incomplete (e.g. streaming tool arguments).
-///
-/// Returns [`JsonResult::Incomplete`] when the payload is cut off mid-token,
-/// allowing the caller to buffer and retry.
-pub fn is_valid_json(s: &str) -> bool {
-    let v = serde_json::from_str::<serde_json::Value>(s);
-    match v {
-        Ok(_) => true,
-        Err(_) => false,
-    }
-}
-
 impl OpenAIClient {
     pub fn new(retry_policy: RetryPolicy) -> Self {
         Self { retry_policy }
@@ -822,12 +811,19 @@ impl OpenAIClient {
             .header("Content-Type", "application/json")
             .body(body)
             .send()
-            .await?
-            .error_for_status()?
-            .json::<OpenAIResponse>()
             .await?;
 
-        Ok(LLMResponse::from(response))
+        let status = response.status();
+        let text = response.text().await?;
+
+        if !status.is_success() {
+            // now you have the actual error body from the API
+            return Err(format!("API error {}: {}", status, text).into());
+        }
+
+        let parsed: OpenAIResponse = serde_json::from_str(&text)?;
+
+        Ok(LLMResponse::from(parsed))
     }
 
     pub async fn stream_response(
@@ -855,7 +851,6 @@ impl OpenAIClient {
             .with(RetryTransientMiddleware::new_with_policy(retry))
             .build();
         let body = serde_json::to_string(&req)?;
-        println!("{}", serde_json::to_string_pretty(&req)?);
         let mut deltas: Vec<LLMStreamingDelta> = vec![];
         let mut response_id: Option<String> = None;
         let mut first_created: Option<u64> = None;
@@ -903,7 +898,7 @@ impl OpenAIClient {
                                     tool_calls.get_or_insert_with(Vec::new).push(ToolCallPart { id: tc.id.expect("The tool call should have been registered with an ID"), name: tc.function.name.expect("The tool call should have been registered with a function name"), arguments: tc.function.arguments });
                                 }
                             }
-                            yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id.clone().unwrap(), deltas: deltas.clone(), created_at: first_created, usage: resp_usage, message, tool_calls }))
+                            yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id.clone().unwrap(), deltas: deltas.clone(), created_at: first_created, usage: resp_usage, message, tool_calls, thinking_deltas: None }))
                         } else {
                             let json_result: Result<OpenAIStreamingMessage, serde_json::Error> = serde_json::from_str(&event.data);
                             match json_result {

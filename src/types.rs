@@ -107,14 +107,22 @@ impl TextPart {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThinkingPart {
     pub thinking: String,
-    pub signature: String,
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 impl ThinkingPart {
-    pub fn new(thinking: impl Into<String>, signature: impl Into<String>) -> Self {
+    pub fn new(thinking: impl Into<String>) -> Self {
         Self {
             thinking: thinking.into(),
-            signature: signature.into(),
+            signature: None,
+        }
+    }
+
+    pub fn new_with_signature(thinking: impl Into<String>, signature: impl Into<String>) -> Self {
+        Self {
+            thinking: thinking.into(),
+            signature: Some(signature.into()),
         }
     }
 }
@@ -792,6 +800,13 @@ pub struct LLMStreamingDelta {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LLMThinkingDelta {
+    pub response_id: String,
+    pub created_at: Option<u64>,
+    pub delta: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMToolDelta {
     pub tool_call_id: String,
     pub name: String,
@@ -804,6 +819,7 @@ pub struct LLMStreamingComplete {
     pub created_at: Option<u64>,
     pub message: Message,
     pub deltas: Vec<LLMStreamingDelta>,
+    pub thinking_deltas: Option<Vec<LLMThinkingDelta>>,
     pub usage: Option<LLMUsage>,
     pub tool_calls: Option<Vec<ToolCallPart>>,
 }
@@ -813,8 +829,21 @@ pub struct LLMStreamingComplete {
 pub enum LLMStreamingResponse {
     Delta(LLMStreamingDelta),
     ToolDelta(LLMToolDelta),
+    ThinkingDelta(LLMThinkingDelta),
     Complete(LLMStreamingComplete),
 }
 
 pub type LLMStreamItem = Result<LLMStreamingResponse, Box<dyn std::error::Error + Send + Sync>>;
 pub type LLMStream = Pin<Box<dyn Stream<Item = LLMStreamItem>>>;
+
+/// Parse a JSON string that may be incomplete (e.g. streaming tool arguments).
+///
+/// Returns [`JsonResult::Incomplete`] when the payload is cut off mid-token,
+/// allowing the caller to buffer and retry.
+pub fn is_valid_json(s: &str) -> bool {
+    let v = serde_json::from_str::<serde_json::Value>(s);
+    match v {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
