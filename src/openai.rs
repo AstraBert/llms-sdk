@@ -868,16 +868,14 @@ impl OpenAIClient {
             let mut events;
             match first_response {
                 Ok(r) => {
-                    let with_error_for_status = r.error_for_status();
-                    match with_error_for_status {
-                        Ok(v) => {
-                            events = v.bytes_stream().eventsource();
-                        },
-                        Err(e) => {
-                            yield Err(e.into());
-                            return;
-                        }
+                    let status = r.status();
+                    if !status.is_success() {
+                        // only now consume the body, as text, for the error message
+                        let text = r.text().await.unwrap_or("unknown error".to_string());
+                        yield Err(format!("API error {}: {}", status, text).into());
+                        return;
                     }
+                    events = r.bytes_stream().eventsource();
                 },
                 Err(e) => {
                     yield Err(e.into());
