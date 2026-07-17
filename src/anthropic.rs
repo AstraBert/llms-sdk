@@ -18,7 +18,6 @@ use crate::{
         UnsupportedType,
     },
     is_valid_json,
-    openai::StreamingCompletionToolCall,
 };
 
 pub const DEFAULT_MAX_TOKENS: u32 = 128_000;
@@ -917,6 +916,7 @@ impl AntClient {
         let mut response_id: Option<String> = None;
         let mut resp_usage: Option<LLMUsage> = None;
         let mut indexed_tool_calls: BTreeMap<u32, ToolCallPart> = BTreeMap::new();
+        let mut parts: BTreeMap<u32, MessagePart> = BTreeMap::new();
 
         let s: LLMStream = Box::pin(stream! {
             let response_result = client
@@ -1007,6 +1007,7 @@ impl AntClient {
                                     deltas: deltas.clone(),
                                     tool_calls,
                                     usage: resp_usage.clone(),
+                                    message: Message { role: MessageRole::Assistant, content: parts.iter().map(|(_, p)| p.to_owned()).collect() }
                                 }));
                                 break;
                             },
@@ -1036,8 +1037,15 @@ impl AntClient {
                                     Ok(st) => {
                                         match st.content_block {
                                             AntMessagePart::ToolCall(tc) => {
-                                                indexed_tool_calls.insert(st.index, tc.into());
+                                                indexed_tool_calls.insert(st.index, ToolCallPart { id: tc.id, name: tc.name, arguments: String::new() });
                                             },
+                                            AntMessagePart::Thinking(t) => {
+                                                parts.insert(st.index, MessagePart::Thinking(ThinkingPart { thinking: t.thinking, signature: t.signature }));
+                                            },
+                                            AntMessagePart::Text(t) => {
+                                                parts.insert(st.index, MessagePart::Text(TextPart { text: t.text }));
+                                            },
+                                            // Assistant shouldn't produce any other part, safe to ignore
                                             _ => continue,
                                         }
                                     }
@@ -1053,6 +1061,11 @@ impl AntClient {
                                     Ok(c) => {
                                         match c {
                                             StreamContentBlock::Text(t) => {
+                                                parts.entry(t.index).and_modify(|v| {
+                                                    if let MessagePart::Text(text) = v {
+                                                        text.text += &t.delta.text;
+                                                    }
+                                                });
                                                 let stream_delta = LLMStreamingDelta {
                                                     response_id: response_id.clone().expect("Response ID should be set by now"),
                                                     created_at: None,
@@ -1063,6 +1076,11 @@ impl AntClient {
                                                 yield Ok(LLMStreamingResponse::Delta(stream_delta));
                                             }
                                             StreamContentBlock::Thinking(t) => {
+                                                parts.entry(t.index).and_modify(|v| {
+                                                    if let MessagePart::Thinking(think) = v {
+                                                        think.thinking += &t.delta.thinking;
+                                                    }
+                                                });
                                                 let thinking_delta = LLMThinkingDelta {
                                                     response_id: response_id.clone().expect("Response ID should be set by now"),
                                                     created_at: None,
@@ -1081,7 +1099,13 @@ impl AntClient {
                                                 };
                                                 yield Ok(LLMStreamingResponse::ToolDelta(tool_delta))
                                             },
-                                            StreamContentBlock::ThinkingSignature(_) => continue
+                                            StreamContentBlock::ThinkingSignature(ts) => {
+                                                parts.entry(ts.index).and_modify(|v| {
+                                                    if let MessagePart::Thinking(think) = v {
+                                                        think.signature.get_or_insert_with(String::new).push_str(&ts.delta.signature);
+                                                    }
+                                                });
+                                            }
                                         }
                                     }
                                 }

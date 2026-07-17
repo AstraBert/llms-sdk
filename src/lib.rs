@@ -45,7 +45,11 @@ impl LLM {
                 let stream = openai_client.stream_response(request).await?;
                 Ok(stream)
             }
-            ApiType::Anthropic => Err("Not yet implemented".into()),
+            ApiType::Anthropic => {
+                let ant_client = AntClient::new(self.retry_policy);
+                let stream = ant_client.stream_response(request).await?;
+                Ok(stream)
+            }
         }
     }
 }

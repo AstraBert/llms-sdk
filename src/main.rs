@@ -174,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     print!("{}", d.delta.unwrap_or_default())
                 }
                 llms_sdk::LLMStreamingResponse::ToolDelta(tc) => {
-                    print!("{}", tc.partial_arguments)
+                    print!("\x1b[38;5;200m{}\x1b[0m", tc.partial_arguments)
                 }
                 llms_sdk::LLMStreamingResponse::ThinkingDelta(td) => {
                     print!("\n\n\x1b[38;5;247m{}\x1b[0m", td.delta.unwrap_or_default())
