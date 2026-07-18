@@ -1,4 +1,4 @@
-# Contributing to `jake`
+# Contributing to `llms-sdk`
 
 Thank you for your interest in contributing to this project! Please review these guidelines before getting started.
 
