@@ -1,0 +1,18 @@
+
+[package]
+authors = ["Clelia Astra Bertelli"]
+edition = "2021"
+name = "llms-sdk-ts"
+version = "0.1.0"
+
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = "3.0.0"
+napi-derive = "3.0.0"
+llms-sdk = { path = "../llms-sdk", version = "0.1.0" }
+
+[build-dependencies]
+napi-build = "2"
