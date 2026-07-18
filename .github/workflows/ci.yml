@@ -152,7 +152,7 @@ jobs:
           CARGO_API_TOKEN: ${{ secrets.CARGO_API_TOKEN }}
 
       - name: Publish to crates
-        run: cargo publish -p "pdfitdown"
+        run: cargo publish
         env:
           CARGO_API_TOKEN: ${{ secrets.CARGO_API_TOKEN }}
 
