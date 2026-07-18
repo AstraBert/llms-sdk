@@ -2,6 +2,11 @@
 name = "llms-sdk"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/AstraBert/llms-sdk"
+description = "Unified interface to call OpenAI and Anthropic-compatible LLM APIs from Rust"
+keywords = ["llms", "ai", "sdk", "openai", "anthropic"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -18,6 +23,9 @@ eventsource-stream = "0.2.3"
 futures-util = "0.3"
 futures-core = "0.3"
 async-stream = "0.3.6"
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
 
 [features]
 default = ["fs"]

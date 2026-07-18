@@ -5,10 +5,11 @@ use schemars::{JsonSchema, Schema, schema_for, schema_for_value};
 #[cfg(feature = "fs")]
 use std::fs;
 #[cfg(feature = "fs")]
+use std::io;
+#[cfg(feature = "fs")]
 use std::path::PathBuf;
 use std::{
     fmt::{Debug, Display},
-    io,
     pin::Pin,
     str::FromStr,
     time::Duration,
@@ -18,10 +19,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::{InvalidInput, UnsupportedType};
 
+/// Default base URL for the OpenAI API.
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+/// Default base URL for the Anthropic API.
 pub const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
+/// OpenAI chat completions API endpoint path.
 pub const CHAT_COMPLETIONS_ENDPOINT: &str = "/chat/completions";
+/// Anthropic messages API endpoint path.
 pub const MESSAGES_ENDPOINT: &str = "/messages";
+/// MIME types accepted for audio message parts.
 pub const ALLOWED_AUDIO_TYPES: &[&str] = &[
     "audio/wav",
     "audio/mp3",
@@ -29,10 +35,13 @@ pub const ALLOWED_AUDIO_TYPES: &[&str] = &[
     "audio/vnd.wav",
     "audio/vnd.wave",
 ];
+/// MIME types accepted for document message parts.
 pub const ALLOWED_DOCUMENT_TYPES: &[&str] = &["application/pdf", "text/plain"];
+/// MIME types accepted for image message parts.
 pub const ALLOWED_IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+/// Role of a participant in a chat message.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
     User,
@@ -57,6 +66,7 @@ impl FromStr for MessageRole {
     }
 }
 
+/// Type of content contained in a [`MessagePart`].
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum MessagePartType {
@@ -66,13 +76,13 @@ pub enum MessagePartType {
     Audio,
 }
 
-impl ToString for MessagePartType {
-    fn to_string(&self) -> String {
+impl Display for MessagePartType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Text => "text".to_string(),
-            Self::Image => "image".to_string(),
-            Self::Audio => "audio".to_string(),
-            Self::Thinking => "thinking".to_string(),
+            Self::Text => write!(f, "text"),
+            Self::Image => write!(f, "image"),
+            Self::Audio => write!(f, "audio"),
+            Self::Thinking => write!(f, "thinking"),
         }
     }
 }
@@ -93,18 +103,21 @@ impl FromStr for MessagePartType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A plain text content part.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TextPart {
     pub text: String,
 }
 
 impl TextPart {
+    /// Creates a new text part from any string-like value.
     pub fn new(text: impl Into<String>) -> Self {
         Self { text: text.into() }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A reasoning/thinking content part, optionally signed by the model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ThinkingPart {
     pub thinking: String,
     #[serde(default)]
@@ -112,6 +125,7 @@ pub struct ThinkingPart {
 }
 
 impl ThinkingPart {
+    /// Creates a new thinking part without a signature.
     pub fn new(thinking: impl Into<String>) -> Self {
         Self {
             thinking: thinking.into(),
@@ -119,6 +133,7 @@ impl ThinkingPart {
         }
     }
 
+    /// Creates a new thinking part with an associated signature.
     pub fn new_with_signature(thinking: impl Into<String>, signature: impl Into<String>) -> Self {
         Self {
             thinking: thinking.into(),
@@ -127,7 +142,8 @@ impl ThinkingPart {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// An image content part, either base64-encoded or loaded from a URL.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ImagePart {
     pub data: String,
     pub is_base64: bool,
@@ -135,6 +151,7 @@ pub struct ImagePart {
 }
 
 impl ImagePart {
+    /// Creates a new base64-encoded image part after validating its MIME type.
     pub fn new(
         data: impl Into<String>,
         mime_type: impl Into<String>,
@@ -156,6 +173,27 @@ impl ImagePart {
         })
     }
 
+    /// Creates an image part from raw bytes, inferring the MIME type.
+    pub fn try_from_bytes(data: Vec<u8>) -> Result<Self, InvalidInput> {
+        let kind = file_format::FileFormat::from_bytes(&data);
+        if !ALLOWED_IMAGE_TYPES.contains(&kind.media_type()) {
+            return Err(InvalidInput {
+                reason: format!(
+                    "Unsupported image type: {}. The supported image types are: {}",
+                    kind.media_type(),
+                    ALLOWED_IMAGE_TYPES.join(", ")
+                ),
+            });
+        }
+        let b64 = BASE64_STANDARD.encode(data);
+        Ok(Self {
+            data: b64,
+            mime_type: Some(kind.media_type().to_owned()),
+            is_base64: true,
+        })
+    }
+
+    /// Reads an image file from disk and encodes it as a base64 image part.
     #[cfg(feature = "fs")]
     pub fn try_from_file(file: String) -> Result<Self, io::Error> {
         let content = fs::read(file)?;
@@ -178,6 +216,7 @@ impl ImagePart {
         })
     }
 
+    /// Creates an image part that references an image URL.
     pub fn from_url(url: String) -> Self {
         Self {
             data: url,
@@ -187,13 +226,15 @@ impl ImagePart {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// An audio content part, base64-encoded.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AudioPart {
     pub data: String,
     pub mime_type: String,
 }
 
 impl AudioPart {
+    /// Creates a new base64-encoded audio part after validating its MIME type.
     pub fn new(
         data: impl Into<String>,
         mime_type: impl Into<String>,
@@ -214,9 +255,10 @@ impl AudioPart {
         })
     }
 
+    /// Creates an audio part from raw bytes, inferring the MIME type.
     pub fn try_from_bytes(data: Vec<u8>) -> Result<Self, InvalidInput> {
         let kind = file_format::FileFormat::from_bytes(&data);
-        if !ALLOWED_AUDIO_TYPES.contains(&&kind.media_type()) {
+        if !ALLOWED_AUDIO_TYPES.contains(&kind.media_type()) {
             return Err(InvalidInput {
                 reason: format!(
                     "Unsupported audio type: {}. The supported audio types are: {}",
@@ -232,6 +274,7 @@ impl AudioPart {
         })
     }
 
+    /// Reads an audio file from disk and encodes it as a base64 audio part.
     #[cfg(feature = "fs")]
     pub fn try_from_file(file: impl Into<PathBuf>) -> Result<Self, io::Error> {
         let content = fs::read(file.into())?;
@@ -254,7 +297,8 @@ impl AudioPart {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A document content part, either base64-encoded or loaded from a URL.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DocumentPart {
     pub data: String,
     pub mime_type: Option<String>,
@@ -262,6 +306,7 @@ pub struct DocumentPart {
 }
 
 impl DocumentPart {
+    /// Creates a new document part after validating its MIME type.
     pub fn new(
         data: impl Into<String>,
         mime_type: impl Into<String>,
@@ -283,6 +328,7 @@ impl DocumentPart {
         })
     }
 
+    /// Creates a base64-encoded PDF document part from raw bytes.
     pub fn try_from_pdf_bytes(data: Vec<u8>) -> Result<Self, InvalidInput> {
         let kind = file_format::FileFormat::from_bytes(&data);
         if kind.media_type() != "application/pdf" {
@@ -301,6 +347,7 @@ impl DocumentPart {
         })
     }
 
+    /// Reads a plain text file from disk as a document part.
     #[cfg(feature = "fs")]
     pub fn try_from_text_file(file: String) -> Result<Self, io::Error> {
         let content = fs::read_to_string(file)?;
@@ -311,6 +358,7 @@ impl DocumentPart {
         })
     }
 
+    /// Reads a PDF file from disk and encodes it as a base64 document part.
     #[cfg(feature = "fs")]
     pub fn try_from_pdf_file(file: String) -> Result<Self, io::Error> {
         let data = fs::read(file)?;
@@ -332,6 +380,7 @@ impl DocumentPart {
         })
     }
 
+    /// Creates a document part that references a document URL.
     pub fn from_url(url: String) -> Self {
         Self {
             data: url,
@@ -341,20 +390,23 @@ impl DocumentPart {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A tool/function call produced by the model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCallPart {
     pub id: String,
     pub name: String,
     pub arguments: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The result of a tool/function call returned to the model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolResultPart {
     pub tool_call_id: String,
     pub result: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A single content item inside a [`Message`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 #[non_exhaustive]
 pub enum MessagePart {
@@ -367,12 +419,14 @@ pub enum MessagePart {
     ToolResult(ToolResultPart),
 }
 
+/// A chat message with a role and one or more content parts.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub role: MessageRole,
     pub content: Vec<MessagePart>,
 }
 
+/// Supported LLM API provider.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum ApiType {
@@ -403,9 +457,12 @@ impl Display for ApiType {
     }
 }
 
+/// Amount of reasoning effort requested from the model.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ReasoningEffort {
+    #[default]
     None,
     Minimal,
     Low,
@@ -415,22 +472,16 @@ pub enum ReasoningEffort {
     Maximum,
 }
 
-impl Default for ReasoningEffort {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-impl ToString for ReasoningEffort {
-    fn to_string(&self) -> String {
+impl Display for ReasoningEffort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::None => "none".to_string(),
-            Self::Minimal => "minimal".to_string(),
-            Self::Low => "low".to_string(),
-            Self::Medium => "medium".to_string(),
-            Self::High => "high".to_string(),
-            Self::Maximum => "maximum".to_string(),
-            Self::Xhigh => "xhigh".to_string(),
+            Self::None => write!(f, "none"),
+            Self::Minimal => write!(f, "minimal"),
+            Self::Low => write!(f, "low"),
+            Self::Medium => write!(f, "medium"),
+            Self::High => write!(f, "high"),
+            Self::Maximum => write!(f, "maximum"),
+            Self::Xhigh => write!(f, "xhigh"),
         }
     }
 }
@@ -452,18 +503,15 @@ impl FromStr for ReasoningEffort {
     }
 }
 
+/// Controls whether and how the model is allowed to call tools.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ToolChoice {
     None,
+    #[default]
     Auto,
     Required,
-}
-
-impl Default for ToolChoice {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl FromStr for ToolChoice {
@@ -481,6 +529,7 @@ impl FromStr for ToolChoice {
     }
 }
 
+/// A tool definition exposed to the model.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Tool {
     pub name: String,
@@ -489,6 +538,7 @@ pub struct Tool {
 }
 
 impl Tool {
+    /// Creates a tool definition from a type that implements [`JsonSchema`].
     pub fn new<T: JsonSchema>(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -497,6 +547,7 @@ impl Tool {
         }
     }
 
+    /// Creates a tool definition from an already-serializable parameters value.
     pub fn from_parameters_value(
         name: impl Into<String>,
         description: impl Into<String>,
@@ -510,6 +561,7 @@ impl Tool {
     }
 }
 
+/// JSON schema describing a structured output format.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OutputFormat {
     pub name: String,
@@ -517,25 +569,42 @@ pub struct OutputFormat {
     pub schema: Schema,
 }
 
+/// A unified request to send to an LLM API.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMRequest {
+    /// Target API provider.
     pub api_type: ApiType,
+    /// Custom base URL for the API. When `None`, the provider's default is used.
     pub base_url: Option<String>,
+    /// API key used to authenticate the request.
     pub api_key: String,
+    /// Model identifier to use for the request.
     pub model: String,
+    /// Conversation history sent to the model.
     pub messages: Vec<Message>,
+    /// Maximum number of tokens the model is allowed to generate.
     pub max_output_tokens: Option<u32>,
+    /// Sampling temperature.
     pub temperature: Option<f32>,
+    /// Nucleus sampling parameter.
     pub top_p: Option<f32>,
+    /// Level of reasoning effort requested from the model.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Prompt cache time-to-live hint (provider-specific format).
     pub prompt_cache_ttl: Option<String>,
+    /// Whether to request a streamed response.
     pub stream: bool,
+    /// Optional JSON schema for structured outputs.
     pub output_format: Option<OutputFormat>,
+    /// Tool definitions made available to the model.
     pub tools: Option<Vec<Tool>>,
+    /// Controls whether the model may call tools.
     pub tool_choice: Option<ToolChoice>,
+    /// Whether the model may call multiple tools in parallel.
     pub parallel_tool_calls: bool,
 }
 
+/// Builder for constructing an [`LLMRequest`].
 pub struct LLMRequestBuilder {
     api_type: ApiType,
     base_url: Option<String>,
@@ -552,6 +621,12 @@ pub struct LLMRequestBuilder {
     tools: Option<Vec<Tool>>,
     tool_choice: Option<ToolChoice>,
     parallel_tool_calls: bool,
+}
+
+impl Default for LLMRequestBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LLMRequestBuilder {
@@ -726,6 +801,7 @@ impl LLMRequest {
     }
 }
 
+/// Configuration for transient request retries.
 #[derive(Debug, Clone, Copy)]
 pub struct RetryPolicy {
     pub max_retries: u32,
@@ -774,6 +850,7 @@ impl RetryPolicy {
     }
 }
 
+/// Token usage reported by the LLM API.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct LLMUsage {
     pub input_tokens: u32,
@@ -783,67 +860,189 @@ pub struct LLMUsage {
     pub other_tokens: Option<u32>,
 }
 
+/// A complete, non-streaming response from the LLM.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMResponse {
+    /// Provider-generated response identifier.
     pub id: String,
+    /// Unix timestamp of the response, when provided by the API.
     pub created_at: Option<u64>,
+    /// The generated message.
     pub message: Message,
+    /// Token usage reported for the request.
     pub usage: LLMUsage,
 }
 
+/// A partial text delta in a streaming response.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMStreamingDelta {
+    /// Identifier of the response this delta belongs to.
     pub response_id: String,
+    /// Unix timestamp of the response, when provided by the API.
     pub created_at: Option<u64>,
+    /// Chunk of generated text, if any.
     pub delta: Option<String>,
+    /// Whether this delta signals the end of the stream.
     pub stop: bool,
 }
 
+/// A partial reasoning/thinking delta in a streaming response.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMThinkingDelta {
+    /// Identifier of the response this delta belongs to.
     pub response_id: String,
+    /// Unix timestamp of the response, when provided by the API.
     pub created_at: Option<u64>,
+    /// Chunk of reasoning text, if any.
     pub delta: Option<String>,
 }
 
+/// A partial tool call argument delta in a streaming response.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMToolDelta {
+    /// Identifier for the in-progress tool call.
     pub tool_call_id: String,
+    /// Name of the tool being called.
     pub name: String,
+    /// Partial JSON arguments accumulated so far.
     pub partial_arguments: String,
 }
 
+/// Final aggregated payload emitted at the end of a streaming response.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMStreamingComplete {
+    /// Provider-generated response identifier.
     pub id: String,
+    /// Unix timestamp of the response, when provided by the API.
     pub created_at: Option<u64>,
+    /// The final assembled message.
     pub message: Message,
+    /// All text deltas that make up the response.
     pub deltas: Vec<LLMStreamingDelta>,
+    /// All reasoning deltas, if the model produced any.
     pub thinking_deltas: Option<Vec<LLMThinkingDelta>>,
+    /// Token usage reported for the request, if provided.
     pub usage: Option<LLMUsage>,
+    /// Complete tool calls parsed from the stream.
     pub tool_calls: Option<Vec<ToolCallPart>>,
 }
 
+/// A single item emitted by an [`LLMStream`].
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum LLMStreamingResponse {
+    /// A chunk of generated text.
     Delta(LLMStreamingDelta),
+    /// A chunk of tool call arguments.
     ToolDelta(LLMToolDelta),
+    /// A chunk of reasoning text.
     ThinkingDelta(LLMThinkingDelta),
+    /// The final aggregated response.
     Complete(LLMStreamingComplete),
 }
 
 pub type LLMStreamItem = Result<LLMStreamingResponse, Box<dyn std::error::Error + Send + Sync>>;
 pub type LLMStream = Pin<Box<dyn Stream<Item = LLMStreamItem>>>;
 
-/// Parse a JSON string that may be incomplete (e.g. streaming tool arguments).
+/// Checks whether a string is valid JSON.
 ///
-/// Returns [`JsonResult::Incomplete`] when the payload is cut off mid-token,
-/// allowing the caller to buffer and retry.
+/// Useful for validating accumulated streaming tool arguments before yielding
+/// a complete [`ToolCallPart`].
 pub fn is_valid_json(s: &str) -> bool {
     let v = serde_json::from_str::<serde_json::Value>(s);
-    match v {
-        Ok(_) => true,
-        Err(_) => false,
+    v.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_valid_json_accepts_complete_object() {
+        assert!(is_valid_json(r#"{"key": "value"}"#));
+    }
+
+    #[test]
+    fn is_valid_json_rejects_incomplete_object() {
+        assert!(!is_valid_json(r#"{"key": "value""#));
+    }
+
+    #[test]
+    fn image_part_try_from_bytes_accepts_png() {
+        let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let part = ImagePart::try_from_bytes(png.to_vec()).unwrap();
+        assert_eq!(part.mime_type, Some("image/png".to_string()));
+        assert!(part.is_base64);
+    }
+
+    #[test]
+    fn image_part_try_from_bytes_rejects_unknown_format() {
+        let part = ImagePart::try_from_bytes(vec![0x00, 0x01, 0x02, 0x03]);
+        assert!(part.is_err());
+    }
+
+    #[test]
+    fn audio_part_try_from_bytes_accepts_wav() {
+        let wav = [
+            0x52, 0x49, 0x46, 0x46, // RIFF
+            0x00, 0x00, 0x00, 0x00, // size
+            0x57, 0x41, 0x56, 0x45, // WAVE
+        ];
+        let part = AudioPart::try_from_bytes(wav.to_vec()).unwrap();
+        assert!(ALLOWED_AUDIO_TYPES.contains(&part.mime_type.as_str()));
+    }
+
+    #[test]
+    fn audio_part_try_from_bytes_accepts_mp3() {
+        let mp3 = [
+            0xFF, 0xFB, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        let part = AudioPart::try_from_bytes(mp3.to_vec()).unwrap();
+        assert_eq!(part.mime_type, "audio/mpeg");
+    }
+
+    #[test]
+    fn document_part_try_from_pdf_bytes_accepts_pdf() {
+        let pdf = b"%PDF-1.4".to_vec();
+        let part = DocumentPart::try_from_pdf_bytes(pdf).unwrap();
+        assert_eq!(part.mime_type, Some("application/pdf".to_string()));
+        assert!(part.is_base64);
+    }
+
+    #[test]
+    fn document_part_try_from_pdf_bytes_rejects_non_pdf() {
+        let part = DocumentPart::try_from_pdf_bytes(b"not a pdf".to_vec());
+        assert!(part.is_err());
+    }
+
+    #[cfg(feature = "fs")]
+    #[test]
+    fn image_part_try_from_file_accepts_cat_jpeg() {
+        let part = ImagePart::try_from_file("files/cat.jpeg".to_string()).unwrap();
+        assert_eq!(part.mime_type, Some("image/jpeg".to_string()));
+        assert!(part.is_base64);
+    }
+
+    #[cfg(feature = "fs")]
+    #[test]
+    fn audio_part_try_from_file_accepts_audio_wav() {
+        let part = AudioPart::try_from_file("files/audio.wav".to_string()).unwrap();
+        assert!(ALLOWED_AUDIO_TYPES.contains(&part.mime_type.as_str()));
+    }
+
+    #[cfg(feature = "fs")]
+    #[test]
+    fn audio_part_try_from_file_accepts_audio_mp3() {
+        let part = AudioPart::try_from_file("files/audio.mp3".to_string()).unwrap();
+        assert_eq!(part.mime_type, "audio/mpeg");
+    }
+
+    #[cfg(feature = "fs")]
+    #[test]
+    fn document_part_try_from_pdf_file_accepts_file_pdf() {
+        let part = DocumentPart::try_from_pdf_file("files/file.pdf".to_string()).unwrap();
+        assert_eq!(part.mime_type, Some("application/pdf".to_string()));
+        assert!(part.is_base64);
     }
 }

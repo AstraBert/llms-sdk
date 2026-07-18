@@ -17,8 +17,10 @@ use crate::{
     is_valid_json,
 };
 
+/// Client for sending requests to OpenAI-compatible chat completion APIs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OpenAIClient {
+    /// Retry policy applied to API requests made by this client.
     pub retry_policy: RetryPolicy,
 }
 
@@ -219,7 +221,7 @@ impl TryFrom<Message> for OpenAIMessage {
 
     fn try_from(value: Message) -> Result<Self, Self::Error> {
         match value.role {
-            MessageRole::User | MessageRole::System => {
+            MessageRole::User => {
                 let mut content = vec![];
                 for p in value.content {
                     let part = OpenAIMessagePart::try_from(p)?;
@@ -235,7 +237,27 @@ impl TryFrom<Message> for OpenAIMessage {
                     }
                 }
                 Ok(Self::User(OpenAISimpleMessage {
-                    role: OpenAIMessageRole::from(value.role),
+                    role: OpenAIMessageRole::User,
+                    content,
+                }))
+            }
+            MessageRole::System => {
+                let mut content = vec![];
+                for p in value.content {
+                    let part = OpenAIMessagePart::try_from(p)?;
+                    match part {
+                        OpenAIMessagePart::ToolCall(_) | OpenAIMessagePart::ToolResult(_) => {
+                            return Err(UnsupportedPartType {
+                                part_type: "tool_call or tool_result (for user/system message)"
+                                    .to_string(),
+                                api_type: ApiType::OpenAI.to_string(),
+                            });
+                        }
+                        _ => content.push(part),
+                    }
+                }
+                Ok(Self::Developer(OpenAISimpleMessage {
+                    role: OpenAIMessageRole::Developer,
                     content,
                 }))
             }
@@ -290,26 +312,26 @@ impl TryFrom<Message> for OpenAIMessage {
                     }
                 }
                 if let Some(tid) = tool_call_id {
-                    return Ok(Self::Tool(OpenAIToolResultMessage {
+                    Ok(Self::Tool(OpenAIToolResultMessage {
                         role: OpenAIMessageRole::Tool,
                         content,
                         tool_call_id: tid,
-                    }));
+                    }))
                 } else {
-                    return Err(UnsupportedPartType {
+                    Err(UnsupportedPartType {
                         part_type: "tool_result does not have a tool_call_id".to_string(),
                         api_type: ApiType::OpenAI.to_string(),
-                    });
+                    })
                 }
             }
         }
     }
 }
 
-impl Into<Message> for OpenAIMessage {
-    fn into(self) -> Message {
-        match self {
-            Self::User(u) => {
+impl From<OpenAIMessage> for Message {
+    fn from(val: OpenAIMessage) -> Self {
+        match val {
+            OpenAIMessage::User(u) => {
                 let mut content = vec![];
                 for c in u.content {
                     match c {
@@ -354,7 +376,7 @@ impl Into<Message> for OpenAIMessage {
                     content,
                 }
             }
-            Self::Assistant(a) => {
+            OpenAIMessage::Assistant(a) => {
                 let mut content = vec![];
                 for c in a.content {
                     match c {
@@ -379,7 +401,7 @@ impl Into<Message> for OpenAIMessage {
                     content,
                 }
             }
-            Self::Developer(d) => {
+            OpenAIMessage::Developer(d) => {
                 let mut content = vec![];
                 for c in d.content {
                     match c {
@@ -395,7 +417,7 @@ impl Into<Message> for OpenAIMessage {
                     content,
                 }
             }
-            Self::Tool(t) => Message {
+            OpenAIMessage::Tool(t) => Message {
                 role: MessageRole::Tool,
                 content: vec![MessagePart::ToolResult(ToolResultPart {
                     tool_call_id: t.tool_call_id,
@@ -408,15 +430,11 @@ impl Into<Message> for OpenAIMessage {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum PromptCacheMode {
+    #[default]
     Implicit,
     Explicit,
-}
-
-impl Default for PromptCacheMode {
-    fn default() -> Self {
-        Self::Implicit
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -462,14 +480,10 @@ impl From<ReasoningEffort> for OpenAIReasoningEffort {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ResponseFormatType {
+    #[default]
     JsonSchema,
-}
-
-impl Default for ResponseFormatType {
-    fn default() -> Self {
-        Self::JsonSchema
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -498,6 +512,7 @@ pub struct OpenAITool {
     pub function: OpenAIFunction,
 }
 
+/// Serialized request body sent to the OpenAI chat completions endpoint.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OpenAIRequest {
     model: String,
@@ -574,9 +589,7 @@ impl TryFrom<LLMRequest> for OpenAIRequest {
                 format_type: ResponseFormatType::default(),
                 json_schema: f,
             }),
-            reasoning_effort: value
-                .reasoning_effort
-                .map(|r| OpenAIReasoningEffort::from(r)),
+            reasoning_effort: value.reasoning_effort.map(OpenAIReasoningEffort::from),
             stream_options,
         })
     }
@@ -642,14 +655,16 @@ impl From<OpenAISimplifiedUsage> for LLMUsage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CompletionMessage {
     pub role: OpenAIMessageRole,
-    pub content: String,
+    pub content: Option<String>,
     pub tool_calls: Option<Vec<OpenAIToolCallPart>>,
 }
 
-impl Into<Message> for CompletionMessage {
-    fn into(self) -> Message {
-        let mut content = vec![MessagePart::Text(TextPart { text: self.content })];
-        if let Some(tcs) = self.tool_calls {
+impl From<CompletionMessage> for Message {
+    fn from(val: CompletionMessage) -> Self {
+        let mut content = vec![MessagePart::Text(TextPart {
+            text: val.content.unwrap_or_default(),
+        })];
+        if let Some(tcs) = val.tool_calls {
             for tc in tcs {
                 content.push(MessagePart::ToolCall(ToolCallPart {
                     id: tc.id,
@@ -672,6 +687,7 @@ pub struct ChatCompletion {
     finish_reason: String,
 }
 
+/// Response body returned by the OpenAI chat completions endpoint.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OpenAIResponse {
     pub id: String,
@@ -737,6 +753,7 @@ pub struct StreamingChatCompletion {
     pub finish_reason: Option<String>,
 }
 
+/// A single event emitted by the OpenAI streaming chat completions endpoint.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OpenAIStreamingMessage {
     pub id: String,
@@ -904,7 +921,7 @@ impl OpenAIClient {
                                     let streaming_delta = LLMStreamingDelta::from(json.clone());
                                     deltas.push(streaming_delta.clone());
                                     yield Ok(LLMStreamingResponse::Delta(streaming_delta));
-                                    let tool_calls = json.choices.first().map_or(None, |c| c.delta.tool_calls.clone());
+                                    let tool_calls = json.choices.first().and_then(|c| c.delta.tool_calls.clone());
                                     if let Some(tcs) = tool_calls {
                                         for t in tcs {
                                             indexed_tool_calls.entry(t.index).and_modify(|v| v.function.arguments += &t.function.arguments).or_insert(t.clone());
@@ -915,12 +932,12 @@ impl OpenAIClient {
                                     if let Some(u) = json.usage {
                                         resp_usage = Some(LLMUsage::from(u));
                                     }
-                                    if let Some(_) = response_id {
+                                    if response_id.is_some() {
 
                                     } else {
                                         response_id = Some(json.id);
                                     }
-                                    if let Some(_) = first_created {
+                                    if first_created.is_some() {
 
                                     } else {
                                         first_created = Some(json.created);
@@ -942,5 +959,415 @@ impl OpenAIClient {
         });
 
         Ok(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ThinkingPart;
+
+    fn text_message(role: MessageRole, text: &str) -> Message {
+        Message {
+            role,
+            content: vec![MessagePart::Text(TextPart {
+                text: text.to_string(),
+            })],
+        }
+    }
+
+    #[test]
+    fn openai_message_user_role_maps_to_user() {
+        let msg = text_message(MessageRole::User, "hello");
+        let openai = OpenAIMessage::try_from(msg).unwrap();
+        assert!(matches!(openai, OpenAIMessage::User(_)));
+    }
+
+    #[test]
+    fn openai_message_system_role_maps_to_developer() {
+        let msg = text_message(MessageRole::System, "sys");
+        let openai = OpenAIMessage::try_from(msg).unwrap();
+        assert!(matches!(openai, OpenAIMessage::Developer(_)));
+    }
+
+    #[test]
+    fn openai_message_roundtrip_preserves_text() {
+        let original = text_message(MessageRole::User, "roundtrip");
+        let openai = OpenAIMessage::try_from(original.clone()).unwrap();
+        let back: Message = openai.into();
+        assert_eq!(back.role, MessageRole::User);
+        assert_eq!(back.content.len(), 1);
+        assert!(matches!(
+            back.content.first(),
+            Some(MessagePart::Text(TextPart { text })) if text == "roundtrip"
+        ));
+    }
+
+    #[test]
+    fn openai_message_rejects_thinking_part() {
+        let msg = Message {
+            role: MessageRole::Assistant,
+            content: vec![MessagePart::Thinking(ThinkingPart::new("thinking"))],
+        };
+        let result = OpenAIMessage::try_from(msg);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn openai_image_part_converts_to_data_url() {
+        let part = ImagePart {
+            data: "abc".to_string(),
+            is_base64: true,
+            mime_type: Some("image/png".to_string()),
+        };
+        let openai = OpenAIImagePart::from(part);
+        assert_eq!(openai.part_type, "image_url");
+        assert_eq!(openai.image_url.url, "data:image/png;base64,abc");
+    }
+
+    #[test]
+    fn openai_image_part_converts_url_unchanged() {
+        let part = ImagePart {
+            data: "https://example.com/img.png".to_string(),
+            is_base64: false,
+            mime_type: None,
+        };
+        let openai = OpenAIImagePart::from(part);
+        assert_eq!(openai.image_url.url, "https://example.com/img.png");
+    }
+
+    #[test]
+    fn openai_audio_part_converts_mpeg_to_mp3() {
+        let part = AudioPart {
+            data: "d".to_string(),
+            mime_type: "audio/mpeg".to_string(),
+        };
+        let openai = OpenAIAudioPart::from(part);
+        assert_eq!(openai.part_type, "input_audio");
+        assert_eq!(openai.input_audio.format, "mp3");
+        assert_eq!(openai.input_audio.data, "d");
+    }
+
+    #[test]
+    fn openai_audio_part_converts_wav_to_wav() {
+        let part = AudioPart {
+            data: "d".to_string(),
+            mime_type: "audio/wav".to_string(),
+        };
+        let openai = OpenAIAudioPart::from(part);
+        assert_eq!(openai.input_audio.format, "wav");
+    }
+
+    #[test]
+    fn openai_message_into_message_preserves_image_data_url() {
+        let openai = OpenAIMessage::User(OpenAISimpleMessage {
+            role: OpenAIMessageRole::User,
+            content: vec![OpenAIMessagePart::Image(OpenAIImagePart {
+                part_type: "image_url".to_string(),
+                image_url: OpenAIImageUrl {
+                    url: "data:image/png;base64,abc".to_string(),
+                },
+            })],
+        });
+        let msg: Message = openai.into();
+        assert!(matches!(
+            msg.content.first(),
+            Some(MessagePart::Image(ImagePart { data, is_base64: true, mime_type: Some(mt) }))
+                if data == "abc" && mt == "image/png"
+        ));
+    }
+
+    #[test]
+    fn openai_message_into_message_preserves_image_url() {
+        let openai = OpenAIMessage::User(OpenAISimpleMessage {
+            role: OpenAIMessageRole::User,
+            content: vec![OpenAIMessagePart::Image(OpenAIImagePart {
+                part_type: "image_url".to_string(),
+                image_url: OpenAIImageUrl {
+                    url: "https://example.com/img.png".to_string(),
+                },
+            })],
+        });
+        let msg: Message = openai.into();
+        assert!(matches!(
+            msg.content.first(),
+            Some(MessagePart::Image(ImagePart { data, is_base64: false, mime_type: None }))
+                if data == "https://example.com/img.png"
+        ));
+    }
+
+    #[test]
+    fn openai_message_into_message_preserves_audio() {
+        let openai = OpenAIMessage::User(OpenAISimpleMessage {
+            role: OpenAIMessageRole::User,
+            content: vec![OpenAIMessagePart::Audio(OpenAIAudioPart {
+                part_type: "input_audio".to_string(),
+                input_audio: OpenAIInputAudio {
+                    data: "d".to_string(),
+                    format: "mp3".to_string(),
+                },
+            })],
+        });
+        let msg: Message = openai.into();
+        assert!(matches!(
+            msg.content.first(),
+            Some(MessagePart::Audio(AudioPart { data, mime_type }))
+                if data == "d" && mime_type == "audio/mp3"
+        ));
+    }
+
+    #[test]
+    fn openai_message_into_message_assistant_preserves_tool_calls() {
+        let openai = OpenAIMessage::Assistant(OpenAIAssistantMessage {
+            role: OpenAIMessageRole::Assistant,
+            content: vec![OpenAIMessagePart::Text(OpenAITextPart {
+                part_type: "text".to_string(),
+                text: "ok".to_string(),
+            })],
+            tool_calls: Some(vec![OpenAIToolCallPart {
+                id: "call_1".to_string(),
+                function: OpenAIFunctionCall {
+                    name: "tool".to_string(),
+                    arguments: "{}".to_string(),
+                },
+                part_type: "function".to_string(),
+            }]),
+        });
+        let msg: Message = openai.into();
+        assert_eq!(msg.content.len(), 2);
+        assert!(matches!(
+            msg.content.get(1),
+            Some(MessagePart::ToolCall(ToolCallPart { id, name, arguments }))
+                if id == "call_1" && name == "tool" && arguments == "{}"
+        ));
+    }
+
+    #[test]
+    fn openai_message_into_message_developer_keeps_system_role() {
+        let openai = OpenAIMessage::Developer(OpenAISimpleMessage {
+            role: OpenAIMessageRole::Developer,
+            content: vec![OpenAIMessagePart::Text(OpenAITextPart {
+                part_type: "text".to_string(),
+                text: "sys".to_string(),
+            })],
+        });
+        let msg: Message = openai.into();
+        assert_eq!(msg.role, MessageRole::System);
+    }
+
+    #[test]
+    fn openai_message_into_message_tool_maps_back() {
+        let openai = OpenAIMessage::Tool(OpenAIToolResultMessage {
+            role: OpenAIMessageRole::Tool,
+            content: "result".to_string(),
+            tool_call_id: "call_1".to_string(),
+        });
+        let msg: Message = openai.into();
+        assert_eq!(msg.role, MessageRole::Tool);
+        assert!(matches!(
+            msg.content.first(),
+            Some(MessagePart::ToolResult(ToolResultPart { tool_call_id, result }))
+                if tool_call_id == "call_1" && result == "result"
+        ));
+    }
+
+    #[test]
+    fn openai_request_drops_empty_tools() {
+        let request = LLMRequest {
+            api_type: ApiType::OpenAI,
+            base_url: Some("https://api.openai.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "gpt-4".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: Some(vec![]),
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let openai_req = OpenAIRequest::try_from(request).unwrap();
+        assert!(openai_req.tools.is_none());
+        assert!(openai_req.parallel_tool_calls.is_none());
+    }
+
+    #[test]
+    fn openai_request_enables_stream_options_when_streaming() {
+        let mut request = LLMRequest {
+            api_type: ApiType::OpenAI,
+            base_url: Some("https://api.openai.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "gpt-4".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: true,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        request.stream = true;
+        let openai_req = OpenAIRequest::try_from(request).unwrap();
+        assert!(openai_req.stream_options.is_some());
+        assert!(openai_req.stream_options.unwrap().include_usage);
+    }
+
+    #[test]
+    fn openai_usage_conversion_sums_other_tokens() {
+        let usage = OpenAIUsage {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+            prompt_tokens_details: OpenAIPromptTokensDetails {
+                cached_tokens: 2,
+                audio_tokens: 1,
+            },
+            completion_tokens_details: OpenAICompletionTokensDetails {
+                reasoning_tokens: 3,
+                audio_tokens: 1,
+                accepted_prediction_tokens: 0,
+                rejected_prediction_tokens: 0,
+            },
+        };
+        let llm_usage = LLMUsage::from(usage);
+        assert_eq!(llm_usage.input_tokens, 10);
+        assert_eq!(llm_usage.output_tokens, 5);
+        assert_eq!(llm_usage.cache_read_tokens, Some(2));
+        assert_eq!(llm_usage.other_tokens, Some(5));
+    }
+
+    #[test]
+    fn openai_simplified_usage_conversion() {
+        let usage = OpenAISimplifiedUsage {
+            prompt_tokens: 7,
+            completion_tokens: 3,
+        };
+        let llm_usage = LLMUsage::from(usage);
+        assert_eq!(llm_usage.input_tokens, 7);
+        assert_eq!(llm_usage.output_tokens, 3);
+        assert!(llm_usage.cache_read_tokens.is_none());
+        assert!(llm_usage.other_tokens.is_none());
+    }
+
+    #[test]
+    fn openai_response_conversion_extracts_first_choice() {
+        let response = OpenAIResponse {
+            id: "resp_123".to_string(),
+            created: 1712345678,
+            model: "gpt-4".to_string(),
+            usage: OpenAIUsage {
+                prompt_tokens: 2,
+                completion_tokens: 4,
+                total_tokens: 6,
+                prompt_tokens_details: OpenAIPromptTokensDetails {
+                    cached_tokens: 0,
+                    audio_tokens: 0,
+                },
+                completion_tokens_details: OpenAICompletionTokensDetails {
+                    reasoning_tokens: 0,
+                    audio_tokens: 0,
+                    accepted_prediction_tokens: 0,
+                    rejected_prediction_tokens: 0,
+                },
+            },
+            choices: vec![ChatCompletion {
+                index: 0,
+                message: CompletionMessage {
+                    role: OpenAIMessageRole::Assistant,
+                    content: Some("hello".to_string()),
+                    tool_calls: None,
+                },
+                finish_reason: "stop".to_string(),
+            }],
+        };
+        let llm_response = LLMResponse::from(response);
+        assert_eq!(llm_response.id, "resp_123");
+        assert_eq!(llm_response.created_at, Some(1712345678));
+        assert_eq!(llm_response.usage.input_tokens, 2);
+        assert_eq!(llm_response.usage.output_tokens, 4);
+        assert!(matches!(
+            llm_response.message.content.first(),
+            Some(MessagePart::Text(TextPart { text })) if text == "hello"
+        ));
+    }
+
+    #[test]
+    fn openai_streaming_message_to_delta_stop_on_finish_reason() {
+        let msg = OpenAIStreamingMessage {
+            id: "stream_1".to_string(),
+            created: 1712345678,
+            choices: vec![StreamingChatCompletion {
+                index: 0,
+                delta: StreamingCompletionDelta {
+                    role: OpenAIMessageRole::Assistant,
+                    content: Some("ok".to_string()),
+                    tool_calls: None,
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: None,
+        };
+        let delta = LLMStreamingDelta::from(msg);
+        assert_eq!(delta.response_id, "stream_1");
+        assert_eq!(delta.delta, Some("ok".to_string()));
+        assert!(delta.stop);
+    }
+
+    #[test]
+    fn openai_streaming_message_to_delta_no_stop_without_finish_reason() {
+        let msg = OpenAIStreamingMessage {
+            id: "stream_2".to_string(),
+            created: 1712345678,
+            choices: vec![StreamingChatCompletion {
+                index: 0,
+                delta: StreamingCompletionDelta {
+                    role: OpenAIMessageRole::Assistant,
+                    content: Some("more".to_string()),
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        };
+        let delta = LLMStreamingDelta::from(msg);
+        assert_eq!(delta.delta, Some("more".to_string()));
+        assert!(!delta.stop);
+    }
+
+    #[test]
+    fn deltas_to_message_joins_text() {
+        let deltas = vec![
+            LLMStreamingDelta {
+                response_id: "a".to_string(),
+                created_at: None,
+                delta: Some("hello ".to_string()),
+                stop: false,
+            },
+            LLMStreamingDelta {
+                response_id: "a".to_string(),
+                created_at: None,
+                delta: Some("world".to_string()),
+                stop: true,
+            },
+        ];
+        let message = deltas_to_message(&deltas);
+        assert_eq!(message.role, MessageRole::User);
+        let joined: String = message
+            .content
+            .into_iter()
+            .filter_map(|p| match p {
+                MessagePart::Text(t) => Some(t.text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(joined, "hello world");
     }
 }

@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+/// Error returned when a string cannot be parsed into a supported enum variant.
 #[derive(Debug)]
 pub struct UnsupportedType {
     pub unsupported_type: String,
@@ -13,6 +14,7 @@ impl Display for UnsupportedType {
 
 impl std::error::Error for UnsupportedType {}
 
+/// Error returned when input data fails validation.
 #[derive(Debug)]
 pub struct InvalidInput {
     pub reason: String,
@@ -26,6 +28,7 @@ impl Display for InvalidInput {
 
 impl std::error::Error for InvalidInput {}
 
+/// Error returned when a message part type is not supported for the target API.
 #[derive(Debug)]
 pub struct UnsupportedPartType {
     pub part_type: String,
@@ -44,6 +47,7 @@ impl Display for UnsupportedPartType {
 
 impl std::error::Error for UnsupportedPartType {}
 
+/// Error returned when the `stream` flag on a request conflicts with the called method.
 #[derive(Debug)]
 pub struct StreamParamError {
     pub should_stream: bool,
@@ -62,6 +66,7 @@ impl Display for StreamParamError {
     }
 }
 
+/// Error returned when a prompt cache TTL value is not supported.
 #[derive(Debug)]
 pub struct InvalidTtl {
     pub ttl: String,
@@ -75,6 +80,7 @@ impl Display for InvalidTtl {
     }
 }
 
+/// Error returned when an [`LLMRequest`](crate::LLMRequest) cannot be converted into an Anthropic request.
 #[derive(Debug)]
 pub struct InvalidAntRequestConversion {
     pub reason: String,

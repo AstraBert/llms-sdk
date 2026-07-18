@@ -85,20 +85,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         key
     } else {
         match api_type {
-            ApiType::OpenAI => {
-                if let Ok(k) = std::env::var("OPENAI_API_KEY") {
-                    k
-                } else {
-                    String::new()
-                }
-            }
-            ApiType::Anthropic => {
-                if let Ok(k) = std::env::var("ANTHROPIC_API_KEY") {
-                    k
-                } else {
-                    String::new()
-                }
-            }
+            ApiType::OpenAI => std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+            ApiType::Anthropic => std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
         }
     };
     let reasoning = match args.reasoning_effort {

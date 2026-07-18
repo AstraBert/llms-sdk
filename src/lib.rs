@@ -1,3 +1,8 @@
+//! Unified interface to call OpenAI and Anthropic-compatible LLM APIs from Rust.
+//!
+//! The main entry point is [`LLM`], which dispatches requests to the appropriate
+//! provider based on [`ApiType`].
+
 pub mod anthropic;
 pub mod errors;
 pub mod openai;
@@ -7,15 +12,20 @@ pub use types::*;
 
 use crate::{anthropic::AntClient, openai::OpenAIClient};
 
+/// Unified entry point for sending requests to OpenAI or Anthropic-compatible APIs.
 #[derive(Debug, Default)]
 pub struct LLM {
+    /// Retry policy applied to all API requests made through this client.
     pub retry_policy: RetryPolicy,
 }
 
 impl LLM {
+    /// Creates a new [`LLM`] client with the provided retry policy.
     pub fn new(retry_policy: RetryPolicy) -> Self {
         Self { retry_policy }
     }
+
+    /// Sends a single completion request and returns the full response.
     pub async fn respond(
         &self,
         request: LLMRequest,
@@ -34,6 +44,8 @@ impl LLM {
             }
         }
     }
+
+    /// Sends a streaming completion request and returns a stream of partial responses.
     pub async fn stream_response(
         &self,
         request: LLMRequest,

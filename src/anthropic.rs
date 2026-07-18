@@ -1,5 +1,5 @@
 use futures_util::StreamExt;
-use std::{collections::BTreeMap, str::FromStr};
+use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use async_stream::stream;
 use eventsource_stream::Eventsource;
@@ -137,12 +137,12 @@ impl From<ToolCallPart> for AntToolCallPart {
     }
 }
 
-impl Into<ToolCallPart> for AntToolCallPart {
-    fn into(self) -> ToolCallPart {
+impl From<AntToolCallPart> for ToolCallPart {
+    fn from(val: AntToolCallPart) -> Self {
         ToolCallPart {
-            id: self.id,
-            name: self.name,
-            arguments: serde_json::to_string(&self.input).expect("Should be serializable"),
+            id: val.id,
+            name: val.name,
+            arguments: serde_json::to_string(&val.input).expect("Should be serializable"),
         }
     }
 }
@@ -273,11 +273,11 @@ pub enum AntMessagePart {
     ToolResult(AntToolResultPart),
 }
 
-impl Into<MessagePart> for AntMessagePart {
-    fn into(self) -> MessagePart {
-        match self {
-            Self::Text(t) => MessagePart::Text(TextPart { text: t.text }),
-            Self::Document(d) => {
+impl From<AntMessagePart> for MessagePart {
+    fn from(val: AntMessagePart) -> Self {
+        match val {
+            AntMessagePart::Text(t) => MessagePart::Text(TextPart { text: t.text }),
+            AntMessagePart::Document(d) => {
                 let (data, is_base64, mime_type) = match d.source {
                     DocumentSource::Base64PDF(b) => (b.data, true, Some(b.media_type)),
                     DocumentSource::UrlPdf(u) => (u.url, false, None),
@@ -289,7 +289,7 @@ impl Into<MessagePart> for AntMessagePart {
                     is_base64,
                 })
             }
-            Self::Image(i) => {
+            AntMessagePart::Image(i) => {
                 let (data, is_base64, mime_type) = match i.source {
                     ImageSource::Base64(b) => (b.data, true, Some(b.media_type)),
                     ImageSource::URL(u) => (u.url, false, None),
@@ -300,17 +300,17 @@ impl Into<MessagePart> for AntMessagePart {
                     mime_type,
                 })
             }
-            Self::Thinking(t) => MessagePart::Thinking(ThinkingPart {
+            AntMessagePart::Thinking(t) => MessagePart::Thinking(ThinkingPart {
                 thinking: t.thinking,
                 signature: t.signature,
             }),
-            Self::ToolCall(tc) => MessagePart::ToolCall(ToolCallPart {
+            AntMessagePart::ToolCall(tc) => MessagePart::ToolCall(ToolCallPart {
                 id: tc.id,
                 name: tc.name,
                 arguments: serde_json::to_string(&tc.input)
                     .expect("Tool input should be serializable"),
             }),
-            Self::ToolResult(tr) => MessagePart::ToolResult(ToolResultPart {
+            AntMessagePart::ToolResult(tr) => MessagePart::ToolResult(ToolResultPart {
                 tool_call_id: tr.tool_use_id,
                 result: tr.content,
             }),
@@ -379,11 +379,11 @@ impl FromStr for AllowedCacheTtl {
     }
 }
 
-impl ToString for AllowedCacheTtl {
-    fn to_string(&self) -> String {
+impl Display for AllowedCacheTtl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::FiveMinutes => "5m".to_string(),
-            Self::OneHour => "1h".to_string(),
+            Self::FiveMinutes => write!(f, "5m"),
+            Self::OneHour => write!(f, "1h"),
         }
     }
 }
@@ -495,6 +495,7 @@ pub enum AntThinkingConfig {
     Adaptive(AntThinkingConfigAdaptive),
 }
 
+/// Serialized request body sent to the Anthropic Messages API.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AntRequest {
     pub model: String,
@@ -565,7 +566,7 @@ impl TryFrom<LLMRequest> for AntRequest {
                     tool_choice_type: "none".to_string(),
                 }),
             });
-            Some(ts.iter().cloned().map(|t| AntTool::from(t)).collect())
+            Some(ts.iter().cloned().map(AntTool::from).collect())
         } else {
             None
         };
@@ -579,7 +580,7 @@ impl TryFrom<LLMRequest> for AntRequest {
             schema: {
                 if f.schema
                     .get("additionalProperties")
-                    .is_none_or(|f| f.as_bool().is_some_and(|o| o))
+                    .is_none_or(|f| f.as_bool().is_none() || f.as_bool().is_some_and(|o| o))
                 {
                     let mut schema = f.schema;
                     schema.insert(
@@ -594,7 +595,7 @@ impl TryFrom<LLMRequest> for AntRequest {
         });
         let output_config = if output_format.is_some() || effort.is_some() {
             Some(AntOutputConfig {
-                effort: effort,
+                effort,
                 format: output_format,
             })
         } else {
@@ -612,7 +613,7 @@ impl TryFrom<LLMRequest> for AntRequest {
             },
         );
         let top_p = if let Some(tp) = value.top_p {
-            if let Some(_) = value.temperature {
+            if value.temperature.is_some() {
                 None
             } else if matches!(thinking, AntThinkingConfig::Adaptive(_)) {
                 Some(0.95)
@@ -666,6 +667,7 @@ impl From<AntUsage> for LLMUsage {
     }
 }
 
+/// Response body returned by the Anthropic Messages API.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AntResponse {
     pub id: String,
@@ -828,8 +830,10 @@ pub struct StreamMessageDelta {
     usage: AntUsage,
 }
 
+/// Client for sending requests to the Anthropic Messages API.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AntClient {
+    /// Retry policy applied to API requests made by this client.
     pub retry_policy: RetryPolicy,
 }
 
@@ -954,17 +958,16 @@ impl AntClient {
                         return;
                     }
                     Ok(event) => {
-                        let event_type;
                         let event_result = StreamEventType::from_str(&event.event);
-                        match event_result {
+                        let event_type = match event_result {
                             Err(e) => {
                                 yield Err(e.into());
                                 return;
                             },
                             Ok(t) => {
-                                event_type = t;
+                                t
                             }
-                        }
+                        };
                         match event_type {
                             StreamEventType::MessageStart => {
                                 let res: Result<StreamMessageStart, serde_json::Error> = serde_json::from_str(&event.data);
@@ -1006,8 +1009,8 @@ impl AntClient {
                                     thinking_deltas: Some(thinking_deltas.clone()),
                                     deltas: deltas.clone(),
                                     tool_calls,
-                                    usage: resp_usage.clone(),
-                                    message: Message { role: MessageRole::Assistant, content: parts.iter().map(|(_, p)| p.to_owned()).collect() }
+                                    usage: resp_usage,
+                                    message: Message { role: MessageRole::Assistant, content: parts.values().map(|p| p.to_owned()).collect() }
                                 }));
                                 break;
                             },
@@ -1119,5 +1122,461 @@ impl AntClient {
         });
 
         Ok(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AudioPart, OutputFormat};
+
+    fn text_message(role: MessageRole, text: &str) -> Message {
+        Message {
+            role,
+            content: vec![MessagePart::Text(TextPart {
+                text: text.to_string(),
+            })],
+        }
+    }
+
+    #[test]
+    fn ant_message_user_role_maps_to_user() {
+        let msg = text_message(MessageRole::User, "hello");
+        let ant = AntMessage::try_from(msg).unwrap();
+        assert!(matches!(ant.role, AntMessageRole::User));
+        assert_eq!(ant.content.len(), 1);
+    }
+
+    #[test]
+    fn ant_message_system_role_maps_to_system() {
+        let msg = text_message(MessageRole::System, "sys");
+        let ant = AntMessage::try_from(msg).unwrap();
+        assert!(matches!(ant.role, AntMessageRole::System));
+    }
+
+    #[test]
+    fn ant_message_rejects_audio_part() {
+        let msg = Message {
+            role: MessageRole::User,
+            content: vec![MessagePart::Audio(AudioPart {
+                data: "data".to_string(),
+                mime_type: "audio/wav".to_string(),
+            })],
+        };
+        let result = AntMessage::try_from(msg);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ant_message_part_roundtrip_text() {
+        let _original = MessagePart::Text(TextPart {
+            text: "roundtrip".to_string(),
+        });
+        let ant_part = AntMessagePart::Text(AntTextPart {
+            part_type: "text".to_string(),
+            text: "roundtrip".to_string(),
+        });
+        let back: MessagePart = ant_part.into();
+        assert!(matches!(
+            back,
+            MessagePart::Text(TextPart { text }) if text == "roundtrip"
+        ));
+    }
+
+    #[test]
+    fn ant_message_part_roundtrip_image_base64() {
+        let ant_part = AntMessagePart::Image(AntImagePart {
+            part_type: "image".to_string(),
+            source: ImageSource::Base64(Base64ImageSource {
+                data: "abc".to_string(),
+                media_type: "image/png".to_string(),
+                source_type: "base64".to_string(),
+            }),
+        });
+        let back: MessagePart = ant_part.into();
+        assert!(matches!(
+            back,
+            MessagePart::Image(ImagePart { data, is_base64: true, mime_type: Some(mt) })
+                if data == "abc" && mt == "image/png"
+        ));
+    }
+
+    #[test]
+    fn ant_message_part_roundtrip_image_url() {
+        let ant_part = AntMessagePart::Image(AntImagePart {
+            part_type: "image".to_string(),
+            source: ImageSource::URL(URLImageSource {
+                url: "https://example.com/img.png".to_string(),
+                source_type: "url".to_string(),
+            }),
+        });
+        let back: MessagePart = ant_part.into();
+        assert!(matches!(
+            back,
+            MessagePart::Image(ImagePart { data, is_base64: false, mime_type: None })
+                if data == "https://example.com/img.png"
+        ));
+    }
+
+    #[test]
+    fn ant_request_extracts_system_message() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![
+                text_message(MessageRole::System, "system prompt"),
+                text_message(MessageRole::User, "hi"),
+            ],
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        assert_eq!(ant_req.system, Some("system prompt".to_string()));
+        assert_eq!(ant_req.messages.len(), 1);
+    }
+
+    #[test]
+    fn ant_request_default_max_tokens_when_unset() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        assert_eq!(ant_req.max_tokens, DEFAULT_MAX_TOKENS);
+    }
+
+    #[test]
+    fn ant_request_disables_top_p_when_temperature_present() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        assert!(ant_req.top_p.is_none());
+        assert_eq!(ant_req.temperature, Some(0.7));
+    }
+
+    #[test]
+    fn ant_request_defaults_top_p_to_0_95() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: None,
+            top_p: Some(0.9),
+            reasoning_effort: Some(ReasoningEffort::Medium),
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        assert_eq!(ant_req.top_p, Some(0.95));
+    }
+
+    #[test]
+    fn ant_request_defaults_temperature_to_1() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: Some(0.5),
+            top_p: None,
+            reasoning_effort: Some(ReasoningEffort::Medium),
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        assert_eq!(ant_req.temperature, Some(1_f32));
+    }
+
+    #[test]
+    fn ant_usage_conversion_maps_cache_tokens() {
+        let usage = AntUsage {
+            input_tokens: 10,
+            cache_creation_input_tokens: 3,
+            cache_read_input_tokens: 2,
+            output_tokens: 5,
+        };
+        let llm_usage = LLMUsage::from(usage);
+        assert_eq!(llm_usage.input_tokens, 10);
+        assert_eq!(llm_usage.output_tokens, 5);
+        assert_eq!(llm_usage.cache_read_tokens, Some(2));
+        assert_eq!(llm_usage.cache_write_tokens, Some(3));
+    }
+
+    #[test]
+    fn ant_request_sets_cache_control_for_valid_ttl() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: Some("5m".to_string()),
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        let cache = ant_req.cache_control.unwrap();
+        assert_eq!(cache.cache_type, "ephemeral");
+        assert_eq!(cache.ttl, "5m");
+    }
+
+    #[test]
+    fn ant_request_rejects_invalid_cache_ttl() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: Some("10s".to_string()),
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        assert!(AntRequest::try_from(request).is_err());
+    }
+
+    #[test]
+    fn ant_request_sets_effort_in_output_config() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: None,
+            top_p: None,
+            reasoning_effort: Some(ReasoningEffort::High),
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        let output_config = ant_req.output_config.unwrap();
+        assert!(matches!(output_config.effort, Some(AntEffort::High)));
+    }
+
+    #[test]
+    fn ant_request_output_format_sets_additional_properties_false() {
+        let schema: schemars::Schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" }
+            }
+        })
+        .try_into()
+        .unwrap();
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: Some(OutputFormat {
+                name: "test".to_string(),
+                description: "test schema".to_string(),
+                schema,
+            }),
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        let format = ant_req.output_config.unwrap().format.unwrap();
+        assert_eq!(
+            format.schema.get("additionalProperties").unwrap().as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn ant_request_output_format_keeps_additional_properties_false() {
+        let schema: schemars::Schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string" }
+            }
+        })
+        .try_into()
+        .unwrap();
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: Some(OutputFormat {
+                name: "test".to_string(),
+                description: "test schema".to_string(),
+                schema,
+            }),
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        let format = ant_req.output_config.unwrap().format.unwrap();
+        assert_eq!(
+            format.schema.get("additionalProperties").unwrap().as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn ant_request_effort_enables_adaptive_thinking() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: None,
+            top_p: None,
+            reasoning_effort: Some(ReasoningEffort::Medium),
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        assert!(matches!(
+            ant_req.thinking,
+            Some(AntThinkingConfig::Adaptive(_))
+        ));
+    }
+
+    #[test]
+    fn ant_request_no_effort_disables_thinking() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: Some(100),
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+        let ant_req = AntRequest::try_from(request).unwrap();
+        assert!(matches!(
+            ant_req.thinking,
+            Some(AntThinkingConfig::Disabled(_))
+        ));
+    }
+
+    #[test]
+    fn ant_response_conversion_assembles_assistant_message() {
+        let response = AntResponse {
+            id: "msg_123".to_string(),
+            content: vec![AntMessagePart::Text(AntTextPart {
+                part_type: "text".to_string(),
+                text: "hello".to_string(),
+            })],
+            usage: AntUsage {
+                input_tokens: 2,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                output_tokens: 1,
+            },
+        };
+        let llm_response = LLMResponse::from(response);
+        assert_eq!(llm_response.id, "msg_123");
+        assert_eq!(llm_response.created_at, None);
+        assert_eq!(llm_response.message.role, MessageRole::Assistant);
+        assert!(matches!(
+            llm_response.message.content.first(),
+            Some(MessagePart::Text(TextPart { text })) if text == "hello"
+        ));
     }
 }
