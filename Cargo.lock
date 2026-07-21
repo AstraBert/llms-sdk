@@ -869,6 +869,8 @@ dependencies = [
 name = "llms-sdk-ts"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "file-format",
  "llms-sdk",
  "napi",
  "napi-build",
