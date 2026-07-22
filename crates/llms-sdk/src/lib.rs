@@ -10,6 +10,16 @@ mod types;
 
 pub use types::*;
 
+use rustls::crypto::ring::default_provider;
+
+/// Installs the `ring` crypto provider for `rustls`.
+///
+/// This should be called once before making any HTTPS requests.
+/// It is safe to call multiple times (subsequent calls are no-ops).
+pub fn install_crypto_provider() {
+    let _ = default_provider().install_default();
+}
+
 use crate::{anthropic::AntClient, openai::OpenAIClient};
 
 /// Unified entry point for sending requests to OpenAI or Anthropic-compatible APIs.
@@ -30,6 +40,7 @@ impl LLM {
         &self,
         request: LLMRequest,
     ) -> Result<LLMResponse, Box<dyn std::error::Error>> {
+        install_crypto_provider();
         let api_type = request.api_type;
         match api_type {
             ApiType::OpenAI => {
@@ -50,6 +61,7 @@ impl LLM {
         &self,
         request: LLMRequest,
     ) -> Result<LLMStream, Box<dyn std::error::Error>> {
+        install_crypto_provider();
         let api_type = request.api_type;
         match api_type {
             ApiType::OpenAI => {

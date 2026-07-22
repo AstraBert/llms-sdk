@@ -66,43 +66,6 @@ impl FromStr for MessageRole {
     }
 }
 
-/// Type of content contained in a [`MessagePart`].
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-pub enum MessagePartType {
-    Text,
-    Thinking,
-    Image,
-    Audio,
-}
-
-impl Display for MessagePartType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Text => write!(f, "text"),
-            Self::Image => write!(f, "image"),
-            Self::Audio => write!(f, "audio"),
-            Self::Thinking => write!(f, "thinking"),
-        }
-    }
-}
-
-impl FromStr for MessagePartType {
-    type Err = UnsupportedType;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "text" => Ok(Self::Text),
-            "thinking" => Ok(Self::Thinking),
-            "image" => Ok(Self::Image),
-            "audio" => Ok(Self::Audio),
-            _ => Err(UnsupportedType {
-                unsupported_type: s.to_owned(),
-            }),
-        }
-    }
-}
-
 /// A plain text content part.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TextPart {
@@ -942,7 +905,7 @@ pub enum LLMStreamingResponse {
 }
 
 pub type LLMStreamItem = Result<LLMStreamingResponse, Box<dyn std::error::Error + Send + Sync>>;
-pub type LLMStream = Pin<Box<dyn Stream<Item = LLMStreamItem>>>;
+pub type LLMStream = Pin<Box<dyn Stream<Item = LLMStreamItem> + Send>>;
 
 /// Checks whether a string is valid JSON.
 ///
