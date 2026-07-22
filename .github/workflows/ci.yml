@@ -112,10 +112,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run tests (with fs)
-        run: cargo test --release --all-features
+        run: cargo test --release --all-features -p "llms-sdk"
 
       - name: Run tests (no fs)
-        run: cargo test --release --no-default-features
+        run: cargo test --release --no-default-features -p "llms-sdk"
 
   publish:
     name: Publish - Rust Core
@@ -152,7 +152,7 @@ jobs:
           CARGO_API_TOKEN: ${{ secrets.CARGO_API_TOKEN }}
 
       - name: Publish to crates
-        run: cargo publish
+        run: cargo publish -p "llms-sdk"
         env:
           CARGO_API_TOKEN: ${{ secrets.CARGO_API_TOKEN }}
 
