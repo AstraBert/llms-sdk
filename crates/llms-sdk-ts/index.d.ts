@@ -31,14 +31,17 @@ export declare class Llm {
    * @param request - The [`LLMRequest`] to send.
    * @param callback - Node-style callback receiving `(err, chunk)`.
    */
-  streamResponse(request: LlmRequest, callback: (err: Error | null, chunk?: LLMStreamingResponse) => void): Promise<void>
+  streamResponse(
+    request: LlmRequest,
+    callback: (err: Error | null, chunk?: LLMStreamingResponse) => void,
+  ): Promise<void>
 }
 export type LLM = Llm
 
 /** Supported LLM API providers. */
 export declare const enum ApiType {
   OpenAI = 'openai',
-  Anthropic = 'anthropic'
+  Anthropic = 'anthropic',
 }
 
 /**
@@ -183,10 +186,10 @@ export interface LlmStreamingDelta {
 
 /** A single item emitted by a streaming LLM response. */
 export type LLMStreamingResponse =
-  | { type: 'Delta', field0: LlmStreamingDelta }
-  | { type: 'ToolDelta', field0: LlmToolDelta }
-  | { type: 'ThinkingDelta', field0: LlmThinkingDelta }
-  | { type: 'Complete', field0: LlmStreamingComplete }
+  | { type: 'Delta'; field0: LlmStreamingDelta }
+  | { type: 'ToolDelta'; field0: LlmToolDelta }
+  | { type: 'ThinkingDelta'; field0: LlmThinkingDelta }
+  | { type: 'Complete'; field0: LlmStreamingComplete }
 
 /** A partial reasoning/thinking delta in a streaming response. */
 export interface LlmThinkingDelta {
@@ -232,20 +235,20 @@ export interface Message {
 
 /** A single item inside a [`Message`]'s content array. */
 export type MessagePart =
-  | { type: 'Text', field0: TextPart }
-  | { type: 'Image', field0: ImagePart }
-  | { type: 'Document', field0: DocumentPart }
-  | { type: 'Audio', field0: AudioPart }
-  | { type: 'ToolCall', field0: ToolCallPart }
-  | { type: 'ToolResult', field0: ToolResultPart }
-  | { type: 'Thinking', field0: ThinkingPart }
+  | { type: 'Text'; field0: TextPart }
+  | { type: 'Image'; field0: ImagePart }
+  | { type: 'Document'; field0: DocumentPart }
+  | { type: 'Audio'; field0: AudioPart }
+  | { type: 'ToolCall'; field0: ToolCallPart }
+  | { type: 'ToolResult'; field0: ToolResultPart }
+  | { type: 'Thinking'; field0: ThinkingPart }
 
 /** Role of a message in the conversation. */
 export declare const enum MessageRole {
   User = 'user',
   Assistant = 'assistant',
   System = 'system',
-  Tool = 'tool'
+  Tool = 'tool',
 }
 
 /** Structured-output format enforced on the model response. */
@@ -266,7 +269,7 @@ export declare const enum ReasoningEffort {
   Medium = 'medium',
   High = 'high',
   Xhigh = 'xhigh',
-  Maximum = 'maximum'
+  Maximum = 'maximum',
 }
 
 /** Retry configuration used when constructing an [`LLM`]. */
@@ -318,7 +321,7 @@ export interface ToolCallPart {
 export declare const enum ToolChoice {
   None = 'none',
   Auto = 'auto',
-  Required = 'required'
+  Required = 'required',
 }
 
 /** Result returned to the model after executing a tool call. */

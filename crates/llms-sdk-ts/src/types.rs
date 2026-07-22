@@ -251,11 +251,45 @@ pub struct DocumentPart {
 pub fn document_part(input: Either<String, Buffer>) -> napi::Result<DocumentPart> {
   match input {
     Either::A(s) => match Url::parse(&s) {
-      Ok(_) => Ok(DocumentPart {
-        data: s,
-        mime_type: None,
-        is_base64: false,
-      }),
+      Ok(u) => {
+        if matches!(u.scheme(), "http" | "https") {
+          Ok(DocumentPart {
+            data: s,
+            mime_type: None,
+            is_base64: false,
+          })
+        } else {
+          let format = file_format::FileFormat::from_file(&s).map_err(|e| {
+            napi::Error::new(
+              napi::Status::InvalidArg,
+              format!("Could not infer format from file: {}", e),
+            )
+          })?;
+          if format.media_type() == "application/pdf" {
+            let data = fs::read(&s)?;
+            Ok(DocumentPart {
+              data: BASE64_STANDARD.encode(data),
+              mime_type: Some("application/pdf".to_string()),
+              is_base64: true,
+            })
+          } else if format.media_type().starts_with("text/") {
+            let data = fs::read_to_string(&s)?;
+            Ok(DocumentPart {
+              data,
+              mime_type: Some("text/plain".to_string()),
+              is_base64: false,
+            })
+          } else {
+            Err(napi::Error::new(
+              napi::Status::InvalidArg,
+              format!(
+                "Expected either a PDF or a text file, found media type: {}",
+                format.media_type()
+              ),
+            ))
+          }
+        }
+      }
       Err(_) => {
         let format = file_format::FileFormat::from_file(&s).map_err(|e| {
           napi::Error::new(

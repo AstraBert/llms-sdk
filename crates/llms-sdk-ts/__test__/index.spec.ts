@@ -61,9 +61,7 @@ function anthropicRequest(model: string, messages: Message[]): LlmRequest {
 }
 
 function shouldRunIntegration(): boolean {
-  return (
-    process.env.RUN_INTEGRATION_TESTS?.toLowerCase() === 'true'
-  )
+  return process.env.RUN_INTEGRATION_TESTS?.toLowerCase() === 'true'
 }
 
 /* ------------------------------------------------------------------ */
@@ -231,9 +229,7 @@ test('OpenAI – tool use', async (t) => {
     },
   }
   const req: LlmRequest = {
-    ...openaiRequest(OPENAI_MODEL, [
-      textMsg('Call the get_weather tool to tell me what is the weather in Paris'),
-    ]),
+    ...openaiRequest(OPENAI_MODEL, [textMsg('Call the get_weather tool to tell me what is the weather in Paris')]),
     tools: [tool],
   }
   const llm = new Llm()
@@ -275,7 +271,6 @@ test('OpenAI - streaming text', async (t) => {
   t.truthy(complete)
   t.truthy(complete!.message)
 })
-
 
 /* ------------------------------------------------------------------ */
 /*  Integration tests – Anthropic                                      */
