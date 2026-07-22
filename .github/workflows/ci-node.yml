@@ -126,7 +126,7 @@ jobs:
       - name: Set cross-compile flags for ring
         if: ${{ contains(matrix.settings.target, 'aarch64-unknown-linux-gnu') }}
         run: |
-          echo 'CFLAGS_aarch64_unknown_linux_gnu="-D__ARM_ARCH=8"' >> "$GITHUB_ENV"
+          echo "CFLAGS_aarch64_unknown_linux_gnu=-D__ARM_ARCH=8" >> "$GITHUB_ENV"
       - name: Build
         run: ${{ matrix.settings.build }}
         shell: bash
