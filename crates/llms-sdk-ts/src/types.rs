@@ -145,11 +145,33 @@ pub struct ImagePart {
 pub fn image_part(input: Either<String, Buffer>) -> napi::Result<ImagePart> {
   match input {
     Either::A(s) => match Url::parse(&s) {
-      Ok(_) => Ok(ImagePart {
-        data: s,
-        mime_type: None,
-        is_base64: false,
-      }),
+      Ok(u) => {
+        if matches!(u.scheme(), "http" | "https") {
+          Ok(ImagePart {
+            data: s,
+            mime_type: None,
+            is_base64: false,
+          })
+        } else {
+          let data = fs::read(&s)?;
+          let format = file_format::FileFormat::from_bytes(&data);
+          if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
+            return Err(napi::Error::new(
+              napi::Status::InvalidArg,
+              format!(
+                "Unsupported image type: {}. The supported image types are: {}",
+                format.media_type(),
+                ALLOWED_IMAGE_TYPES.join(", ")
+              ),
+            ));
+          }
+          Ok(ImagePart {
+            data: BASE64_STANDARD.encode(&data),
+            mime_type: Some(format.media_type().to_owned()),
+            is_base64: true,
+          })
+        }
+      }
       Err(_) => {
         let data = fs::read(&s)?;
         let format = file_format::FileFormat::from_bytes(&data);
