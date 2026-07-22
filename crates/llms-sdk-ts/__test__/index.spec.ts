@@ -16,6 +16,7 @@ import {
   type OutputFormat,
   ToolChoice,
   ReasoningEffort,
+  textPart,
 } from '../index'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -28,7 +29,7 @@ const FILES_DIR = resolve(__dirname, '../../llms-sdk/files')
 function textMsg(text: string): Message {
   return {
     role: MessageRole.User,
-    content: [{ type: 'Text', field0: { text } }],
+    content: [textPart({ text })],
   }
 }
 
@@ -70,61 +71,91 @@ function shouldRunIntegration(): boolean {
 
 test('imagePart from file path', (t) => {
   const part = imagePart(resolve(FILES_DIR, 'cat.jpeg'))
-  t.is(part.isBase64, true)
-  t.is(part.mimeType, 'image/jpeg')
-  t.true(part.data.length > 0)
+  t.is(part.type, 'Image')
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.isBase64, true)
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.mimeType, 'image/jpeg')
+  // @ts-expect-error Field does not exist
+  t.true(part.field0.data.length > 0)
 })
 
 test('imagePart from Buffer', (t) => {
   const buf = readFileSync(resolve(FILES_DIR, 'cat.jpeg'))
   const part = imagePart(buf)
-  t.is(part.isBase64, true)
-  t.is(part.mimeType, 'image/jpeg')
-  t.true(part.data.length > 0)
+  t.is(part.type, 'Image')
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.isBase64, true)
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.mimeType, 'image/jpeg')
+  // @ts-expect-error Field does not exist
+  t.true(part.field0.data.length > 0)
 })
 
 test('imagePart from URL string', (t) => {
   const url = 'https://example.com/cat.jpeg'
   const part = imagePart(url)
-  t.is(part.isBase64, false)
-  t.is(part.mimeType, undefined)
-  t.is(part.data, url)
+  t.is(part.type, 'Image')
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.isBase64, false)
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.mimeType, undefined)
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.data, url)
 })
 
 test('audioPart from file path', (t) => {
   const part = audioPart(resolve(FILES_DIR, 'audio.wav'))
-  t.is(part.mimeType, 'audio/vnd.wave')
-  t.true(part.data.length > 0)
+  t.is(part.type, 'Audio')
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.mimeType, 'audio/vnd.wave')
+  // @ts-expect-error Field does not exist
+  t.true(part.field0.data.length > 0)
 })
 
 test('audioPart from Buffer', (t) => {
   const buf = readFileSync(resolve(FILES_DIR, 'audio.mp3'))
   const part = audioPart(buf)
-  t.is(part.mimeType, 'audio/mpeg')
-  t.true(part.data.length > 0)
+  t.is(part.type, 'Audio')
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.mimeType, 'audio/mpeg')
+  // @ts-expect-error Field does not exist
+  t.true(part.field0.data.length > 0)
 })
 
 test('documentPart from PDF file path', (t) => {
   const part = documentPart(resolve(FILES_DIR, 'file.pdf'))
-  t.is(part.isBase64, true)
-  t.is(part.mimeType, 'application/pdf')
-  t.true(part.data.length > 0)
+  t.is(part.type, 'Document')
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.isBase64, true)
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.mimeType, 'application/pdf')
+  // @ts-expect-error Field does not exist
+  t.true(part.field0.data.length > 0)
 })
 
 test('documentPart from PDF Buffer', (t) => {
   const buf = readFileSync(resolve(FILES_DIR, 'file.pdf'))
   const part = documentPart(buf)
-  t.is(part.isBase64, true)
-  t.is(part.mimeType, 'application/pdf')
-  t.true(part.data.length > 0)
+  t.is(part.type, 'Document')
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.isBase64, true)
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.mimeType, 'application/pdf')
+  // @ts-expect-error Field does not exist
+  t.true(part.field0.data.length > 0)
 })
 
 test('documentPart from URL string', (t) => {
   const url = 'https://example.com/file.pdf'
   const part = documentPart(url)
-  t.is(part.isBase64, false)
-  t.is(part.mimeType, undefined)
-  t.is(part.data, url)
+  t.is(part.type, 'Document')
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.isBase64, false)
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.mimeType, undefined)
+  // @ts-expect-error Field does not exist
+  t.is(part.field0.data, url)
 })
 
 /* ------------------------------------------------------------------ */
@@ -152,10 +183,7 @@ test('OpenAI – image input', async (t) => {
   const img = imagePart(resolve(FILES_DIR, 'cat.jpeg'))
   const msg: Message = {
     role: MessageRole.User,
-    content: [
-      { type: 'Text', field0: { text: 'Describe this image briefly.' } },
-      { type: 'Image', field0: img },
-    ],
+    content: [textPart({ text: 'Describe this image briefly.' }), img],
   }
   const req = openaiRequest(OPENAI_MODEL, [msg])
   const llm = new Llm()
@@ -171,10 +199,7 @@ test('OpenAI – audio input', async (t) => {
   const aud = audioPart(resolve(FILES_DIR, 'audio.wav'))
   const msg: Message = {
     role: MessageRole.User,
-    content: [
-      { type: 'Text', field0: { text: 'Describe this audio briefly.' } },
-      { type: 'Audio', field0: aud },
-    ],
+    content: [textPart({ text: 'Describe this audio briefly.' }), aud],
   }
   const req = openaiRequest('gpt-audio-1.5', [msg])
   const llm = new Llm()
@@ -297,10 +322,7 @@ test('Anthropic – image input', async (t) => {
   const img = imagePart(resolve(FILES_DIR, 'cat.jpeg'))
   const msg: Message = {
     role: MessageRole.User,
-    content: [
-      { type: 'Text', field0: { text: 'Describe this image briefly.' } },
-      { type: 'Image', field0: img },
-    ],
+    content: [textPart({ text: 'Describe this image briefly.' }), img],
   }
   const req = anthropicRequest(ANTHROPIC_MODEL, [msg])
   const llm = new Llm()
@@ -316,10 +338,7 @@ test('Anthropic – document input', async (t) => {
   const doc = documentPart(resolve(FILES_DIR, 'file.pdf'))
   const msg: Message = {
     role: MessageRole.User,
-    content: [
-      { type: 'Text', field0: { text: 'Summarize this document briefly.' } },
-      { type: 'Document', field0: doc },
-    ],
+    content: [textPart({ text: 'Summarize this document briefly.' }), doc],
   }
   const req = anthropicRequest(ANTHROPIC_MODEL, [msg])
   const llm = new Llm()

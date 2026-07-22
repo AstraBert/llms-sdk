@@ -125,8 +125,6 @@ pub struct TextPart {
 }
 
 /// Image segment of a message.
-///
-/// Created via [`image_part()`].
 #[napi(object)]
 pub struct ImagePart {
   /// Raw image data (base64-encoded) or a URL.
@@ -137,86 +135,7 @@ pub struct ImagePart {
   pub is_base64: bool,
 }
 
-/// Create an [`ImagePart`] from a URL, file path, or raw bytes.
-///
-/// @param input - Either a URL/path (`string`) or a `Buffer` containing image data.
-/// @returns An `ImagePart` ready to be added to a [`Message`].
-#[napi]
-pub fn image_part(input: Either<String, Buffer>) -> napi::Result<ImagePart> {
-  match input {
-    Either::A(s) => match Url::parse(&s) {
-      Ok(u) => {
-        if matches!(u.scheme(), "http" | "https") {
-          Ok(ImagePart {
-            data: s,
-            mime_type: None,
-            is_base64: false,
-          })
-        } else {
-          let data = fs::read(&s)?;
-          let format = file_format::FileFormat::from_bytes(&data);
-          if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
-            return Err(napi::Error::new(
-              napi::Status::InvalidArg,
-              format!(
-                "Unsupported image type: {}. The supported image types are: {}",
-                format.media_type(),
-                ALLOWED_IMAGE_TYPES.join(", ")
-              ),
-            ));
-          }
-          Ok(ImagePart {
-            data: BASE64_STANDARD.encode(&data),
-            mime_type: Some(format.media_type().to_owned()),
-            is_base64: true,
-          })
-        }
-      }
-      Err(_) => {
-        let data = fs::read(&s)?;
-        let format = file_format::FileFormat::from_bytes(&data);
-        if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
-          return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!(
-              "Unsupported image type: {}. The supported image types are: {}",
-              format.media_type(),
-              ALLOWED_IMAGE_TYPES.join(", ")
-            ),
-          ));
-        }
-        Ok(ImagePart {
-          data: BASE64_STANDARD.encode(&data),
-          mime_type: Some(format.media_type().to_owned()),
-          is_base64: true,
-        })
-      }
-    },
-    Either::B(buf) => {
-      let data: Vec<u8> = buf.into();
-      let format = file_format::FileFormat::from_bytes(&data);
-      if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Unsupported image type: {}. The supported image types are: {}",
-            format.media_type(),
-            ALLOWED_IMAGE_TYPES.join(", ")
-          ),
-        ));
-      }
-      Ok(ImagePart {
-        data: BASE64_STANDARD.encode(&data),
-        mime_type: Some(format.media_type().to_owned()),
-        is_base64: true,
-      })
-    }
-  }
-}
-
 /// Audio segment of a message.
-///
-/// Created via [`audio_part()`].
 #[napi(object)]
 pub struct AudioPart {
   /// Base64-encoded audio data.
@@ -225,36 +144,7 @@ pub struct AudioPart {
   pub mime_type: String,
 }
 
-/// Create an [`AudioPart`] from a file path or raw bytes.
-///
-/// @param input - Either a file path (`string`) or a `Buffer` containing audio data.
-/// @returns An `AudioPart` ready to be added to a [`Message`].
-#[napi]
-pub fn audio_part(input: Either<String, Buffer>) -> napi::Result<AudioPart> {
-  let data: Vec<u8> = match input {
-    Either::A(s) => fs::read(&s)?,
-    Either::B(buf) => buf.into(),
-  };
-  let format = file_format::FileFormat::from_bytes(&data);
-  if !ALLOWED_AUDIO_TYPES.contains(&format.media_type()) {
-    return Err(napi::Error::new(
-      napi::Status::InvalidArg,
-      format!(
-        "Unsupported audio type: {}. The supported audio types are: {}",
-        format.media_type(),
-        ALLOWED_AUDIO_TYPES.join(", ")
-      ),
-    ));
-  }
-  Ok(AudioPart {
-    data: BASE64_STANDARD.encode(&data),
-    mime_type: format.media_type().to_owned(),
-  })
-}
-
 /// Document segment of a message (PDF or plain text).
-///
-/// Created via [`document_part()`].
 #[napi(object)]
 pub struct DocumentPart {
   /// Raw document data (base64-encoded) or a URL.
@@ -263,106 +153,6 @@ pub struct DocumentPart {
   pub mime_type: Option<String>,
   /// Whether `data` is base64-encoded (`true`) or a URL (`false`).
   pub is_base64: bool,
-}
-
-/// Create a [`DocumentPart`] from a URL, file path, or raw bytes.
-///
-/// @param input - Either a URL/path (`string`) or a `Buffer` containing PDF data.
-/// @returns A `DocumentPart` ready to be added to a [`Message`].
-#[napi]
-pub fn document_part(input: Either<String, Buffer>) -> napi::Result<DocumentPart> {
-  match input {
-    Either::A(s) => match Url::parse(&s) {
-      Ok(u) => {
-        if matches!(u.scheme(), "http" | "https") {
-          Ok(DocumentPart {
-            data: s,
-            mime_type: None,
-            is_base64: false,
-          })
-        } else {
-          let format = file_format::FileFormat::from_file(&s).map_err(|e| {
-            napi::Error::new(
-              napi::Status::InvalidArg,
-              format!("Could not infer format from file: {}", e),
-            )
-          })?;
-          if format.media_type() == "application/pdf" {
-            let data = fs::read(&s)?;
-            Ok(DocumentPart {
-              data: BASE64_STANDARD.encode(data),
-              mime_type: Some("application/pdf".to_string()),
-              is_base64: true,
-            })
-          } else if format.media_type().starts_with("text/") {
-            let data = fs::read_to_string(&s)?;
-            Ok(DocumentPart {
-              data,
-              mime_type: Some("text/plain".to_string()),
-              is_base64: false,
-            })
-          } else {
-            Err(napi::Error::new(
-              napi::Status::InvalidArg,
-              format!(
-                "Expected either a PDF or a text file, found media type: {}",
-                format.media_type()
-              ),
-            ))
-          }
-        }
-      }
-      Err(_) => {
-        let format = file_format::FileFormat::from_file(&s).map_err(|e| {
-          napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("Could not infer format from file: {}", e),
-          )
-        })?;
-        if format.media_type() == "application/pdf" {
-          let data = fs::read(&s)?;
-          Ok(DocumentPart {
-            data: BASE64_STANDARD.encode(data),
-            mime_type: Some("application/pdf".to_string()),
-            is_base64: true,
-          })
-        } else if format.media_type().starts_with("text/") {
-          let data = fs::read_to_string(&s)?;
-          Ok(DocumentPart {
-            data,
-            mime_type: Some("text/plain".to_string()),
-            is_base64: false,
-          })
-        } else {
-          Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!(
-              "Expected either a PDF or a text file, found media type: {}",
-              format.media_type()
-            ),
-          ))
-        }
-      }
-    },
-    Either::B(buf) => {
-      let data: Vec<u8> = buf.into();
-      let format = file_format::FileFormat::from_bytes(&data);
-      if format.media_type() != "application/pdf" {
-        return Err(napi::Error::new(
-          napi::Status::InvalidArg,
-          format!(
-            "Input file should be a PDF, found media type: {}",
-            format.media_type()
-          ),
-        ));
-      }
-      Ok(DocumentPart {
-        data: BASE64_STANDARD.encode(&data),
-        mime_type: Some(format.media_type().to_owned()),
-        is_base64: true,
-      })
-    }
-  }
 }
 
 /// A tool call issued by the model.
@@ -475,6 +265,246 @@ impl From<NativeMessagePart> for MessagePart {
       _ => unreachable!("Should not reach this arm"),
     }
   }
+}
+
+/// Create an `MessagePart.Image` from a URL, file path, or raw bytes.
+///
+/// @param input - Either a URL/path (`string`) or a `Buffer` containing image data.
+/// @returns A `MessagePart` ready to be added to a `Message`.
+#[napi]
+pub fn image_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
+  match input {
+    Either::A(s) => match Url::parse(&s) {
+      Ok(u) => {
+        if matches!(u.scheme(), "http" | "https") {
+          Ok(MessagePart::Image(ImagePart {
+            data: s,
+            mime_type: None,
+            is_base64: false,
+          }))
+        } else {
+          let data = fs::read(&s)?;
+          let format = file_format::FileFormat::from_bytes(&data);
+          if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
+            return Err(napi::Error::new(
+              napi::Status::InvalidArg,
+              format!(
+                "Unsupported image type: {}. The supported image types are: {}",
+                format.media_type(),
+                ALLOWED_IMAGE_TYPES.join(", ")
+              ),
+            ));
+          }
+          Ok(MessagePart::Image(ImagePart {
+            data: BASE64_STANDARD.encode(&data),
+            mime_type: Some(format.media_type().to_owned()),
+            is_base64: true,
+          }))
+        }
+      }
+      Err(_) => {
+        let data = fs::read(&s)?;
+        let format = file_format::FileFormat::from_bytes(&data);
+        if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
+          return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+              "Unsupported image type: {}. The supported image types are: {}",
+              format.media_type(),
+              ALLOWED_IMAGE_TYPES.join(", ")
+            ),
+          ));
+        }
+        Ok(MessagePart::Image(ImagePart {
+          data: BASE64_STANDARD.encode(&data),
+          mime_type: Some(format.media_type().to_owned()),
+          is_base64: true,
+        }))
+      }
+    },
+    Either::B(buf) => {
+      let data: Vec<u8> = buf.into();
+      let format = file_format::FileFormat::from_bytes(&data);
+      if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Unsupported image type: {}. The supported image types are: {}",
+            format.media_type(),
+            ALLOWED_IMAGE_TYPES.join(", ")
+          ),
+        ));
+      }
+      Ok(MessagePart::Image(ImagePart {
+        data: BASE64_STANDARD.encode(&data),
+        mime_type: Some(format.media_type().to_owned()),
+        is_base64: true,
+      }))
+    }
+  }
+}
+
+/// Create a `MessagePart.Document` from a URL, file path, or raw bytes.
+///
+/// @param input - Either a URL/path (`string`) or a `Buffer` containing PDF data.
+/// @returns A `MessagePart` ready to be added to a `Message`.
+#[napi]
+pub fn document_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
+  match input {
+    Either::A(s) => match Url::parse(&s) {
+      Ok(u) => {
+        if matches!(u.scheme(), "http" | "https") {
+          Ok(MessagePart::Document(DocumentPart {
+            data: s,
+            mime_type: None,
+            is_base64: false,
+          }))
+        } else {
+          let format = file_format::FileFormat::from_file(&s).map_err(|e| {
+            napi::Error::new(
+              napi::Status::InvalidArg,
+              format!("Could not infer format from file: {}", e),
+            )
+          })?;
+          if format.media_type() == "application/pdf" {
+            let data = fs::read(&s)?;
+            Ok(MessagePart::Document(DocumentPart {
+              data: BASE64_STANDARD.encode(data),
+              mime_type: Some("application/pdf".to_string()),
+              is_base64: true,
+            }))
+          } else if format.media_type().starts_with("text/") {
+            let data = fs::read_to_string(&s)?;
+            Ok(MessagePart::Document(DocumentPart {
+              data,
+              mime_type: Some("text/plain".to_string()),
+              is_base64: false,
+            }))
+          } else {
+            Err(napi::Error::new(
+              napi::Status::InvalidArg,
+              format!(
+                "Expected either a PDF or a text file, found media type: {}",
+                format.media_type()
+              ),
+            ))
+          }
+        }
+      }
+      Err(_) => {
+        let format = file_format::FileFormat::from_file(&s).map_err(|e| {
+          napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("Could not infer format from file: {}", e),
+          )
+        })?;
+        if format.media_type() == "application/pdf" {
+          let data = fs::read(&s)?;
+          Ok(MessagePart::Document(DocumentPart {
+            data: BASE64_STANDARD.encode(data),
+            mime_type: Some("application/pdf".to_string()),
+            is_base64: true,
+          }))
+        } else if format.media_type().starts_with("text/") {
+          let data = fs::read_to_string(&s)?;
+          Ok(MessagePart::Document(DocumentPart {
+            data,
+            mime_type: Some("text/plain".to_string()),
+            is_base64: false,
+          }))
+        } else {
+          Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+              "Expected either a PDF or a text file, found media type: {}",
+              format.media_type()
+            ),
+          ))
+        }
+      }
+    },
+    Either::B(buf) => {
+      let data: Vec<u8> = buf.into();
+      let format = file_format::FileFormat::from_bytes(&data);
+      if format.media_type() != "application/pdf" {
+        return Err(napi::Error::new(
+          napi::Status::InvalidArg,
+          format!(
+            "Input file should be a PDF, found media type: {}",
+            format.media_type()
+          ),
+        ));
+      }
+      Ok(MessagePart::Document(DocumentPart {
+        data: BASE64_STANDARD.encode(&data),
+        mime_type: Some(format.media_type().to_owned()),
+        is_base64: true,
+      }))
+    }
+  }
+}
+
+/// Create a `MessagePart.Audio` from a file path or raw bytes.
+///
+/// @param input - Either a file path (`string`) or a `Buffer` containing audio data.
+/// @returns A `MessagePart` ready to be added to a `Message`.
+#[napi]
+pub fn audio_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
+  let data: Vec<u8> = match input {
+    Either::A(s) => fs::read(&s)?,
+    Either::B(buf) => buf.into(),
+  };
+  let format = file_format::FileFormat::from_bytes(&data);
+  if !ALLOWED_AUDIO_TYPES.contains(&format.media_type()) {
+    return Err(napi::Error::new(
+      napi::Status::InvalidArg,
+      format!(
+        "Unsupported audio type: {}. The supported audio types are: {}",
+        format.media_type(),
+        ALLOWED_AUDIO_TYPES.join(", ")
+      ),
+    ));
+  }
+  Ok(MessagePart::Audio(AudioPart {
+    data: BASE64_STANDARD.encode(&data),
+    mime_type: format.media_type().to_owned(),
+  }))
+}
+
+#[napi]
+/// Create an `MessagePart.Text` from text content.
+///
+/// @param part - Text to be added to the part
+/// @returns A `MessagePart` ready to be added to a `Message`.
+pub fn text_part(part: TextPart) -> MessagePart {
+  MessagePart::Text(part)
+}
+
+#[napi]
+/// Create an `MessagePart.ToolCall` from tool call data.
+///
+/// @param part - tool call data
+/// @returns A `MessagePart` ready to be added to a `Message`.
+pub fn toool_call_part(part: ToolCallPart) -> MessagePart {
+  MessagePart::ToolCall(part)
+}
+
+#[napi]
+/// Create an `MessagePart.ToolResult` from tool result data.
+///
+/// @param part - tool result data.
+/// @returns A `MessagePart` ready to be added to a `Message`.
+pub fn tool_result_part(part: ToolResultPart) -> MessagePart {
+  MessagePart::ToolResult(part)
+}
+
+#[napi]
+/// Create an `MessagePart.Thinking` from a thinking trace and an optional cryptographic signature.
+///
+/// @param part - thinking trace and signature.
+/// @returns A `MessagePart` ready to be added to a `Message`.
+pub fn thinking_part(part: ThinkingPart) -> MessagePart {
+  MessagePart::Thinking(part)
 }
 
 /// A single turn in the conversation.
