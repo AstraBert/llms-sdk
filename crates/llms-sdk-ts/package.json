@@ -1,14 +1,13 @@
 {
   "name": "@cle-does-things/llms-sdk",
   "version": "0.1.0",
-  "description": "Unified interface to call OpenAI and Anthropic-compatible LLM APIs from Rust",
+  "description": "Unified interface to call OpenAI and Anthropic-compatible LLM APIs from Typescript",
   "main": "index.js",
   "repository": {
     "type": "git",
     "url": "git+ssh://git@github.com/AstraBert/llms-sdk"
   },
   "license": "MIT",
-  "browser": "browser.js",
   "keywords": [
     "llms",
     "sdk",

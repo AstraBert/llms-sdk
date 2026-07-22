@@ -2,6 +2,8 @@
 
 A unified Rust SDK for calling LLM APIs. It currently supports **OpenAI-compatible chat completions** and the **Anthropic Messages API** through a single request/response model.
 
+> **TypeScript / Node.js bindings are available** in [`crates/llms-sdk-ts`](./crates/llms-sdk-ts).
+
 ## Features
 
 - Single interface for OpenAI and Anthropic requests.
@@ -11,8 +13,11 @@ A unified Rust SDK for calling LLM APIs. It currently supports **OpenAI-compatib
 - Streaming responses with text, tool, and reasoning deltas.
 - Configurable transient retry policy.
 - Optional CLI binary (`llms`) behind the `cli` feature.
+- TypeScript / Node.js bindings via NAPI-RS (`@cle-does-things/llms-sdk`).
 
 ## Installation
+
+### Rust
 
 Add the crate to your `Cargo.toml`:
 
@@ -27,6 +32,16 @@ Enable optional features as needed:
 [dependencies]
 llms-sdk = { version = "0.1.1", features = ["cli"] }
 ```
+
+### TypeScript / Node.js
+
+```bash
+npm install @cle-does-things/llms-sdk
+# or
+yarn add @cle-does-things/llms-sdk
+```
+
+See [`crates/llms-sdk-ts/README.md`](./crates/llms-sdk-ts/README.md) for TS examples and API docs.
 
 ## Quick start
 
