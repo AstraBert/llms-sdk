@@ -25,7 +25,7 @@ Prebuilt binaries are included for the most common platforms. If your platform i
 ## Quick start
 
 ```typescript
-import { Llm, ApiType, MessageRole } from '@cle-does-things/llms-sdk'
+import { Llm, ApiType, MessageRole, textPart } from '@cle-does-things/llms-sdk'
 
 async function main() {
   const request = {
@@ -35,7 +35,7 @@ async function main() {
     messages: [
       {
         role: MessageRole.User,
-        content: [{ type: 'Text', field0: { text: 'Hello!' } }],
+        content: textPart({ text: 'Hello!' }),
       },
     ],
     maxOutputTokens: 256,
@@ -66,12 +66,11 @@ main()
 ```typescript
 import { imagePart } from '@cle-does-things/llms-sdk'
 
-const img = imagePart('files/cat.jpeg') // or a Buffer, or a URL
 const message = {
   role: MessageRole.User,
   content: [
-    { type: 'Text', field0: { text: 'Describe this image.' } },
-    { type: 'Image', field0: img },
+    textPart({ text: 'Describe this image.' }),
+    imagePart('files/cat.jpeg'), // or a Buffer, or a URL
   ],
 }
 ```
@@ -79,14 +78,13 @@ const message = {
 ### Audio (OpenAI only)
 
 ```typescript
-import { audioPart } from '@cle-does-things/llms-sdk'
+import { audioPart, textPart } from '@cle-does-things/llms-sdk'
 
-const aud = audioPart('files/audio.wav') // or a Buffer
 const message = {
   role: MessageRole.User,
   content: [
-    { type: 'Text', field0: { text: 'Describe this audio.' } },
-    { type: 'Audio', field0: aud },
+    textPart({ text: 'Describe this audio.' }),
+    audioPart('files/audio.wav'), // or a Buffer
   ],
 }
 ```
@@ -94,14 +92,13 @@ const message = {
 ### Document (Anthropic only)
 
 ```typescript
-import { documentPart } from '@cle-does-things/llms-sdk'
+import { documentPart, textPart } from '@cle-does-things/llms-sdk'
 
-const doc = documentPart('files/file.pdf') // or a Buffer, or a URL
 const message = {
   role: MessageRole.User,
   content: [
-    { type: 'Text', field0: { text: 'Summarize this document.' } },
-    { type: 'Document', field0: doc },
+    textPart({ text: 'Summarize this document.' }),
+    documentPart('files/file.pdf'), // or a Buffer, or a URL
   ],
 }
 ```

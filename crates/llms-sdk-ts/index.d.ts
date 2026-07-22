@@ -45,18 +45,14 @@ export declare const enum ApiType {
 }
 
 /**
- * Create an [`AudioPart`] from a file path or raw bytes.
+ * Create a `MessagePart.Audio` from a file path or raw bytes.
  *
  * @param input - Either a file path (`string`) or a `Buffer` containing audio data.
- * @returns An `AudioPart` ready to be added to a [`Message`].
+ * @returns A `MessagePart` ready to be added to a `Message`.
  */
-export declare function audioPart(input: string | Buffer): AudioPart
+export declare function audioPart(input: string | Buffer): MessagePart
 
-/**
- * Audio segment of a message.
- *
- * Created via [`audio_part()`].
- */
+/** Audio segment of a message. */
 export interface AudioPart {
   /** Base64-encoded audio data. */
   data: string
@@ -65,18 +61,14 @@ export interface AudioPart {
 }
 
 /**
- * Create a [`DocumentPart`] from a URL, file path, or raw bytes.
+ * Create a `MessagePart.Document` from a URL, file path, or raw bytes.
  *
  * @param input - Either a URL/path (`string`) or a `Buffer` containing PDF data.
- * @returns A `DocumentPart` ready to be added to a [`Message`].
+ * @returns A `MessagePart` ready to be added to a `Message`.
  */
-export declare function documentPart(input: string | Buffer): DocumentPart
+export declare function documentPart(input: string | Buffer): MessagePart
 
-/**
- * Document segment of a message (PDF or plain text).
- *
- * Created via [`document_part()`].
- */
+/** Document segment of a message (PDF or plain text). */
 export interface DocumentPart {
   /** Raw document data (base64-encoded) or a URL. */
   data: string
@@ -87,18 +79,14 @@ export interface DocumentPart {
 }
 
 /**
- * Create an [`ImagePart`] from a URL, file path, or raw bytes.
+ * Create an `MessagePart.Image` from a URL, file path, or raw bytes.
  *
  * @param input - Either a URL/path (`string`) or a `Buffer` containing image data.
- * @returns An `ImagePart` ready to be added to a [`Message`].
+ * @returns A `MessagePart` ready to be added to a `Message`.
  */
-export declare function imagePart(input: string | Buffer): ImagePart
+export declare function imagePart(input: string | Buffer): MessagePart
 
-/**
- * Image segment of a message.
- *
- * Created via [`image_part()`].
- */
+/** Image segment of a message. */
 export interface ImagePart {
   /** Raw image data (base64-encoded) or a URL. */
   data: string
@@ -284,10 +272,26 @@ export interface RetryPolicy {
   base: number
 }
 
+/**
+ * Create an `MessagePart.Text` from text content.
+ *
+ * @param part - Text to be added to the part
+ * @returns A `MessagePart` ready to be added to a `Message`.
+ */
+export declare function textPart(part: TextPart): MessagePart
+
 /** Plain-text segment of a message. */
 export interface TextPart {
   text: string
 }
+
+/**
+ * Create an `MessagePart.Thinking` from a thinking trace and an optional cryptographic signature.
+ *
+ * @param part - thinking trace and signature.
+ * @returns A `MessagePart` ready to be added to a `Message`.
+ */
+export declare function thinkingPart(part: ThinkingPart): MessagePart
 
 /** A reasoning/thinking block produced by the model. */
 export interface ThinkingPart {
@@ -324,6 +328,14 @@ export declare const enum ToolChoice {
   Required = 'required',
 }
 
+/**
+ * Create an `MessagePart.ToolResult` from tool result data.
+ *
+ * @param part - tool result data.
+ * @returns A `MessagePart` ready to be added to a `Message`.
+ */
+export declare function toolResultPart(part: ToolResultPart): MessagePart
+
 /** Result returned to the model after executing a tool call. */
 export interface ToolResultPart {
   /** Identifier of the original tool call this result belongs to. */
@@ -331,3 +343,11 @@ export interface ToolResultPart {
   /** JSON-encoded result payload. */
   result: string
 }
+
+/**
+ * Create an `MessagePart.ToolCall` from tool call data.
+ *
+ * @param part - tool call data
+ * @returns A `MessagePart` ready to be added to a `Message`.
+ */
+export declare function tooolCallPart(part: ToolCallPart): MessagePart
