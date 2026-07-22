@@ -18,14 +18,14 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-llms-sdk = "0.1.0"
+llms-sdk = "0.1.1"
 ```
 
 Enable optional features as needed:
 
 ```toml
 [dependencies]
-llms-sdk = { version = "0.1.0", features = ["cli"] }
+llms-sdk = { version = "0.1.1", features = ["cli"] }
 ```
 
 ## Quick start
