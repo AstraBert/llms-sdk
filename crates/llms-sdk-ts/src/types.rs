@@ -20,6 +20,7 @@ use llms_sdk::ToolCallPart as NativeToolCallPart;
 use llms_sdk::ToolChoice as NativeToolChoice;
 use llms_sdk::ToolResultPart as NativeToolResultPart;
 use llms_sdk::{ALLOWED_AUDIO_TYPES, ALLOWED_IMAGE_TYPES};
+use napi::bindgen_prelude::Either4;
 use napi::bindgen_prelude::{Buffer, Either};
 use schemars::Schema;
 use std::fs;
@@ -29,6 +30,7 @@ use napi_derive::napi;
 
 /// Role of a message in the conversation.
 #[napi(string_enum = "lowercase")]
+#[derive(Debug, Clone, Copy)]
 pub enum MessageRole {
   User,
   Assistant,
@@ -60,6 +62,7 @@ impl From<NativeMessageRole> for MessageRole {
 
 /// Supported LLM API providers.
 #[napi(string_enum = "lowercase")]
+#[derive(Debug, Clone, Copy)]
 pub enum ApiType {
   OpenAI,
   Anthropic,
@@ -76,6 +79,7 @@ impl From<ApiType> for NativeApiType {
 
 /// Amount of reasoning effort the model should expend.
 #[napi(string_enum = "lowercase")]
+#[derive(Debug, Clone, Copy)]
 pub enum ReasoningEffort {
   None,
   Minimal,
@@ -102,6 +106,7 @@ impl From<ReasoningEffort> for NativeReasoningEffort {
 
 /// Controls whether the model is allowed to call tools.
 #[napi(string_enum = "lowercase")]
+#[derive(Debug, Clone, Copy)]
 pub enum ToolChoice {
   None,
   Auto,
@@ -120,12 +125,14 @@ impl From<ToolChoice> for NativeToolChoice {
 
 /// Plain-text segment of a message.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct TextPart {
   pub text: String,
 }
 
 /// Image segment of a message.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct ImagePart {
   /// Raw image data (base64-encoded) or a URL.
   pub data: String,
@@ -137,6 +144,7 @@ pub struct ImagePart {
 
 /// Audio segment of a message.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct AudioPart {
   /// Base64-encoded audio data.
   pub data: String,
@@ -146,6 +154,7 @@ pub struct AudioPart {
 
 /// Document segment of a message (PDF or plain text).
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct DocumentPart {
   /// Raw document data (base64-encoded) or a URL.
   pub data: String,
@@ -157,6 +166,7 @@ pub struct DocumentPart {
 
 /// A tool call issued by the model.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct ToolCallPart {
   /// Unique identifier for this tool call.
   pub id: String,
@@ -168,6 +178,7 @@ pub struct ToolCallPart {
 
 /// Result returned to the model after executing a tool call.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct ToolResultPart {
   /// Identifier of the original tool call this result belongs to.
   pub tool_call_id: String,
@@ -177,6 +188,7 @@ pub struct ToolResultPart {
 
 /// A reasoning/thinking block produced by the model.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct ThinkingPart {
   /// The model's internal reasoning text.
   pub thinking: String,
@@ -186,6 +198,7 @@ pub struct ThinkingPart {
 
 /// A single item inside a [`Message`]'s content array.
 #[napi]
+#[derive(Debug, Clone)]
 pub enum MessagePart {
   Text(TextPart),
   Image(ImagePart),
@@ -509,6 +522,7 @@ pub fn thinking_part(part: ThinkingPart) -> MessagePart {
 
 /// A single turn in the conversation.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct Message {
   /// Who produced this message (user, assistant, system, or tool).
   pub role: MessageRole,
@@ -544,6 +558,7 @@ impl From<NativeMessage> for Message {
 
 /// A tool definition made available to the model.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct Tool {
   /// Name of the tool.
   pub name: String,
@@ -567,6 +582,7 @@ impl TryFrom<Tool> for NativeTool {
 
 /// Structured-output format enforced on the model response.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct OutputFormat {
   /// Name of the output format.
   pub name: String,
@@ -590,6 +606,7 @@ impl TryFrom<OutputFormat> for NativeOutputFormat {
 
 /// Request payload sent to the LLM.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct LLMRequest {
   /// Target API provider.
   pub api_type: ApiType,
@@ -662,6 +679,7 @@ impl TryFrom<LLMRequest> for NativeLLMRequest {
 
 /// Token usage reported by the LLM API.
 #[napi(object)]
+#[derive(Debug, Clone, Copy)]
 pub struct LLMUsage {
   /// Tokens consumed by the prompt.
   pub input_tokens: u32,
@@ -677,6 +695,7 @@ pub struct LLMUsage {
 
 /// A complete, non-streaming response from the LLM.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct LLMResponse {
   /// Provider-generated response identifier.
   pub id: String,
@@ -707,6 +726,7 @@ impl From<NativeLLMResponse> for LLMResponse {
 
 /// A partial text delta in a streaming response.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct LLMStreamingDelta {
   /// Identifier of the response this delta belongs to.
   pub response_id: String,
@@ -731,6 +751,7 @@ impl From<NativeLLMStreamingDelta> for LLMStreamingDelta {
 
 /// A partial reasoning/thinking delta in a streaming response.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct LLMThinkingDelta {
   /// Identifier of the response this delta belongs to.
   pub response_id: String,
@@ -752,6 +773,7 @@ impl From<NativeLLMThinkingDelta> for LLMThinkingDelta {
 
 /// A partial tool call argument delta in a streaming response.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct LLMToolDelta {
   /// Identifier for the in-progress tool call.
   pub tool_call_id: String,
@@ -763,6 +785,7 @@ pub struct LLMToolDelta {
 
 /// Final aggregated payload emitted at the end of a streaming response.
 #[napi(object)]
+#[derive(Debug, Clone)]
 pub struct LLMStreamingComplete {
   /// Provider-generated response identifier.
   pub id: String,
@@ -782,6 +805,7 @@ pub struct LLMStreamingComplete {
 
 /// A single item emitted by a streaming LLM response.
 #[napi]
+#[derive(Debug, Clone)]
 pub enum LLMStreamingResponse {
   /// A chunk of generated text.
   Delta(LLMStreamingDelta),
@@ -791,6 +815,22 @@ pub enum LLMStreamingResponse {
   ThinkingDelta(LLMThinkingDelta),
   /// The final aggregated response.
   Complete(LLMStreamingComplete),
+}
+
+#[napi]
+/// Get the streaming response out of a streamed chunk in the Llm.streamResponse method.
+///
+/// @param chunk - An LLMStreamingResponse chunk
+/// @returns A `LLMStreamingDelta`, `LLMToolDelta`, `LLMThinkingDelta` or a `LLMStreamingComplete` message, based on the content of the chunk.
+pub fn streaming_response(
+  chunk: LLMStreamingResponse,
+) -> Either4<LLMStreamingDelta, LLMToolDelta, LLMThinkingDelta, LLMStreamingComplete> {
+  match chunk {
+    LLMStreamingResponse::Delta(d) => Either4::A(d.clone()),
+    LLMStreamingResponse::ToolDelta(t) => Either4::B(t.clone()),
+    LLMStreamingResponse::ThinkingDelta(t) => Either4::C(t.clone()),
+    LLMStreamingResponse::Complete(c) => Either4::D(c.clone()),
+  }
 }
 
 impl From<NativeLLMStreamingResponse> for LLMStreamingResponse {
