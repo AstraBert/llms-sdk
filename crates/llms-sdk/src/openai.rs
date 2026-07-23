@@ -779,14 +779,20 @@ impl From<OpenAIStreamingMessage> for LLMStreamingDelta {
     }
 }
 
-fn deltas_to_message(deltas: &[LLMStreamingDelta]) -> Message {
+fn deltas_to_message(deltas: &[LLMStreamingDelta], tool_calls: Option<&[ToolCallPart]>) -> Message {
     let mut text = String::new();
     for delta in deltas {
         text += delta.delta.clone().unwrap_or_default().as_ref();
     }
+    let mut content = vec![MessagePart::Text(TextPart { text })];
+    if let Some(tcs) = tool_calls {
+        for tc in tcs {
+            content.push(MessagePart::ToolCall(tc.to_owned()));
+        }
+    }
     Message {
         role: MessageRole::Assistant,
-        content: vec![MessagePart::Text(TextPart { text })],
+        content,
     }
 }
 
@@ -901,7 +907,6 @@ impl OpenAIClient {
                 match ev {
                     Ok(event) => {
                         if event.data == "[DONE]" {
-                            let message = deltas_to_message(&deltas);
                             let mut tool_calls = None;
                             if !indexed_tool_calls.is_empty() {
                                 for (_, tc) in indexed_tool_calls.clone() {
@@ -911,11 +916,17 @@ impl OpenAIClient {
                                     tool_calls.get_or_insert_with(Vec::new).push(ToolCallPart { id: tc.id.expect("The tool call should have been registered with an ID"), name: tc.function.name.expect("The tool call should have been registered with a function name"), arguments: tc.function.arguments });
                                 }
                             }
+                            let message = deltas_to_message(&deltas, tool_calls.as_deref());
                             yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id.clone().unwrap(), deltas: deltas.clone(), created_at: first_created, usage: resp_usage, message, tool_calls, thinking_deltas: None }))
                         } else {
                             let json_result: Result<OpenAIStreamingMessage, serde_json::Error> = serde_json::from_str(&event.data);
                             match json_result {
                                 Ok(json) => {
+                                    if response_id.is_some() {
+
+                                    } else {
+                                        response_id = Some(json.clone().id);
+                                    }
                                     let streaming_delta = LLMStreamingDelta::from(json.clone());
                                     deltas.push(streaming_delta.clone());
                                     yield Ok(LLMStreamingResponse::Delta(streaming_delta));
@@ -924,16 +935,11 @@ impl OpenAIClient {
                                         for t in tcs {
                                             indexed_tool_calls.entry(t.index).and_modify(|v| v.function.arguments += &t.function.arguments).or_insert(t.clone());
                                             let indexd_tool_call = indexed_tool_calls.get(&t.index).unwrap();
-                                            yield Ok(LLMStreamingResponse::ToolDelta(LLMToolDelta { tool_call_id: indexd_tool_call.id.clone().expect("Tool call should have been registered with an ID"), name: indexd_tool_call.function.name.clone().expect("Tool call should have been registered with a name"), partial_arguments: t.function.arguments }))
+                                            yield Ok(LLMStreamingResponse::ToolDelta(LLMToolDelta { response_id: response_id.clone().expect("Should have a response id by now"), tool_call_id: indexd_tool_call.id.clone().expect("Tool call should have been registered with an ID"), name: indexd_tool_call.function.name.clone().expect("Tool call should have been registered with a name"), partial_arguments: t.function.arguments }))
                                         }
                                     }
                                     if let Some(u) = json.usage {
                                         resp_usage = Some(LLMUsage::from(u));
-                                    }
-                                    if response_id.is_some() {
-
-                                    } else {
-                                        response_id = Some(json.id);
                                     }
                                     if first_created.is_some() {
 
@@ -1356,7 +1362,7 @@ mod tests {
                 stop: true,
             },
         ];
-        let message = deltas_to_message(&deltas);
+        let message = deltas_to_message(&deltas, None);
         assert_eq!(message.role, MessageRole::Assistant);
         assert_eq!(message.content.len(), 1);
         let joined: String = message
@@ -1368,5 +1374,44 @@ mod tests {
             })
             .collect();
         assert_eq!(joined, "hello world");
+    }
+
+    #[test]
+    fn deltas_to_message_tool_calls() {
+        let deltas = vec![
+            LLMStreamingDelta {
+                response_id: "a".to_string(),
+                created_at: None,
+                delta: Some("hello ".to_string()),
+                stop: false,
+            },
+            LLMStreamingDelta {
+                response_id: "a".to_string(),
+                created_at: None,
+                delta: Some("world".to_string()),
+                stop: true,
+            },
+        ];
+        let tool_calls = Some(vec![ToolCallPart {
+            id: "a".to_string(),
+            arguments: "{'something': 'something'}".to_string(),
+            name: "some_tool".to_string(),
+        }]);
+        let message = deltas_to_message(&deltas, tool_calls.as_deref());
+        assert_eq!(message.role, MessageRole::Assistant);
+        assert_eq!(message.content.len(), 2);
+        for c in message.content {
+            match c {
+                MessagePart::Text(t) => {
+                    assert_eq!(t.text, "hello world");
+                }
+                MessagePart::ToolCall(tc) => {
+                    assert_eq!(tc.id, "a");
+                    assert_eq!(tc.name, "some_tool");
+                    assert_eq!(tc.arguments, "{'something': 'something'}");
+                }
+                _ => panic!("There should not be any parts apart from tool calls and texts"),
+            }
+        }
     }
 }

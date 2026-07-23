@@ -1096,6 +1096,7 @@ impl AntClient {
                                                 indexed_tool_calls.entry(t.index).and_modify(|e| e.arguments += &t.delta.partial_json);
                                                 let tool_call = indexed_tool_calls.get(&t.index).expect("Tool call should have been registered by now");
                                                 let tool_delta = LLMToolDelta {
+                                                    response_id: response_id.clone().expect("Response ID should be set by now"),
                                                     tool_call_id: tool_call.id.clone(),
                                                     partial_arguments: t.delta.partial_json,
                                                     name: tool_call.name.clone(),
