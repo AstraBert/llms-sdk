@@ -780,15 +780,13 @@ impl From<OpenAIStreamingMessage> for LLMStreamingDelta {
 }
 
 fn deltas_to_message(deltas: &[LLMStreamingDelta]) -> Message {
-    let mut content = vec![];
+    let mut text = String::new();
     for delta in deltas {
-        content.push(MessagePart::Text(TextPart {
-            text: delta.delta.to_owned().unwrap_or_default(),
-        }));
+        text += delta.delta.clone().unwrap_or_default().as_ref();
     }
     Message {
-        role: MessageRole::User,
-        content,
+        role: MessageRole::Assistant,
+        content: vec![MessagePart::Text(TextPart { text })],
     }
 }
 
@@ -1359,7 +1357,8 @@ mod tests {
             },
         ];
         let message = deltas_to_message(&deltas);
-        assert_eq!(message.role, MessageRole::User);
+        assert_eq!(message.role, MessageRole::Assistant);
+        assert_eq!(message.content.len(), 1);
         let joined: String = message
             .content
             .into_iter()
