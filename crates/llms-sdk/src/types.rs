@@ -863,6 +863,8 @@ pub struct LLMThinkingDelta {
 /// A partial tool call argument delta in a streaming response.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMToolDelta {
+    /// Identifier of the response this delta belongs to.
+    pub response_id: String,
     /// Identifier for the in-progress tool call.
     pub tool_call_id: String,
     /// Name of the tool being called.
