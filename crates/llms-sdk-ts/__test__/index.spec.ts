@@ -17,6 +17,9 @@ import {
   ToolChoice,
   ReasoningEffort,
   textPart,
+  streamingResponse,
+  LlmStreamingDelta,
+  LlmStreamingComplete,
 } from '../index'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -284,9 +287,10 @@ test('OpenAI - streaming text', async (t) => {
       }
       if (!chunk) return
       if (chunk.type === 'Delta') {
-        if (chunk.field0.delta) deltas.push(chunk.field0.delta)
+        const resp = streamingResponse(chunk) as LlmStreamingDelta
+        if (resp.delta) deltas.push(resp.delta)
       } else if (chunk.type === 'Complete') {
-        complete = chunk.field0
+        complete = streamingResponse(chunk) as LlmStreamingComplete
         resolve()
       }
     })
@@ -426,9 +430,10 @@ test('Anthropic - streaming text', async (t) => {
       }
       if (!chunk) return
       if (chunk.type === 'Delta') {
-        if (chunk.field0.delta) deltas.push(chunk.field0.delta)
+        const resp = streamingResponse(chunk) as LlmStreamingDelta
+        if (resp.delta) deltas.push(resp.delta)
       } else if (chunk.type === 'Complete') {
-        complete = chunk.field0
+        complete = streamingResponse(chunk) as LlmStreamingComplete
         resolve()
       }
     })

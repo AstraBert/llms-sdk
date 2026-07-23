@@ -273,6 +273,16 @@ export interface RetryPolicy {
 }
 
 /**
+ * Get the streaming response out of a streamed chunk in the Llm.streamResponse method.
+ *
+ * @param chunk - An LLMStreamingResponse chunk
+ * @returns A `LLMStreamingDelta`, `LLMToolDelta`, `LLMThinkingDelta` or a `LLMStreamingComplete` message, based on the content of the chunk.
+ */
+export declare function streamingResponse(
+  chunk: LLMStreamingResponse,
+): LlmStreamingDelta | LlmToolDelta | LlmThinkingDelta | LlmStreamingComplete
+
+/**
  * Create an `MessagePart.Text` from text content.
  *
  * @param part - Text to be added to the part

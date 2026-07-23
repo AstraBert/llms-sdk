@@ -565,6 +565,7 @@ module.exports.documentPart = nativeBinding.documentPart
 module.exports.imagePart = nativeBinding.imagePart
 module.exports.MessageRole = nativeBinding.MessageRole
 module.exports.ReasoningEffort = nativeBinding.ReasoningEffort
+module.exports.streamingResponse = nativeBinding.streamingResponse
 module.exports.textPart = nativeBinding.textPart
 module.exports.thinkingPart = nativeBinding.thinkingPart
 module.exports.ToolChoice = nativeBinding.ToolChoice
