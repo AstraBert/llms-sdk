@@ -996,10 +996,11 @@ impl AntClient {
                             StreamEventType::MessageStop => {
                                 let mut tool_calls = None;
                                 if !indexed_tool_calls.is_empty() {
-                                    for (_, tc) in indexed_tool_calls.clone() {
+                                    for (idx, tc) in indexed_tool_calls.clone() {
                                         if !is_valid_json(&tc.arguments) {
                                             continue;
                                         }
+                                        parts.insert(idx, MessagePart::ToolCall(tc.to_owned()));
                                         tool_calls.get_or_insert_with(Vec::new).push(tc);
                                     }
                                 }
