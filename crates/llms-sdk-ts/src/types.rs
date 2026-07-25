@@ -21,6 +21,7 @@ use llms_sdk::ToolChoice as NativeToolChoice;
 use llms_sdk::ToolResultPart as NativeToolResultPart;
 use llms_sdk::{ALLOWED_AUDIO_TYPES, ALLOWED_IMAGE_TYPES};
 use napi::bindgen_prelude::Either4;
+use napi::bindgen_prelude::Either7;
 use napi::bindgen_prelude::{Buffer, Either};
 use schemars::Schema;
 use std::fs;
@@ -127,6 +128,8 @@ impl From<ToolChoice> for NativeToolChoice {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct TextPart {
+  #[napi(js_name = "type", ts_type = "\"text\"")]
+  pub r#type: String,
   pub text: String,
 }
 
@@ -134,8 +137,10 @@ pub struct TextPart {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct ImagePart {
+  #[napi(js_name = "type", ts_type = "\"image\"")]
+  pub r#type: String,
   /// Raw image data (base64-encoded) or a URL.
-  pub data: String,
+  pub image_data: String,
   /// MIME type of the image, when known.
   pub mime_type: Option<String>,
   /// Whether `data` is base64-encoded (`true`) or a URL (`false`).
@@ -146,8 +151,10 @@ pub struct ImagePart {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct AudioPart {
+  #[napi(js_name = "type", ts_type = "\"audio\"")]
+  pub r#type: String,
   /// Base64-encoded audio data.
-  pub data: String,
+  pub audio_data: String,
   /// MIME type of the audio (e.g. `audio/mpeg`).
   pub mime_type: String,
 }
@@ -156,8 +163,10 @@ pub struct AudioPart {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct DocumentPart {
+  #[napi(js_name = "type", ts_type = "\"document\"")]
+  pub r#type: String,
   /// Raw document data (base64-encoded) or a URL.
-  pub data: String,
+  pub document_data: String,
   /// MIME type of the document, when known.
   pub mime_type: Option<String>,
   /// Whether `data` is base64-encoded (`true`) or a URL (`false`).
@@ -168,6 +177,8 @@ pub struct DocumentPart {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct ToolCallPart {
+  #[napi(js_name = "type", ts_type = "\"toolCall\"")]
+  pub r#type: String,
   /// Unique identifier for this tool call.
   pub id: String,
   /// Name of the tool being invoked.
@@ -180,6 +191,8 @@ pub struct ToolCallPart {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct ToolResultPart {
+  #[napi(js_name = "type", ts_type = "\"toolResult\"")]
+  pub r#type: String,
   /// Identifier of the original tool call this result belongs to.
   pub tool_call_id: String,
   /// JSON-encoded result payload.
@@ -190,6 +203,8 @@ pub struct ToolResultPart {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct ThinkingPart {
+  #[napi(js_name = "type", ts_type = "\"thinking\"")]
+  pub r#type: String,
   /// The model's internal reasoning text.
   pub thinking: String,
   /// Cryptographic signature verifying the reasoning, when provided.
@@ -197,46 +212,48 @@ pub struct ThinkingPart {
 }
 
 /// A single item inside a [`Message`]'s content array.
-#[napi]
+#[napi(transparent)]
 #[derive(Debug, Clone)]
-pub enum MessagePart {
-  Text(TextPart),
-  Image(ImagePart),
-  Document(DocumentPart),
-  Audio(AudioPart),
-  ToolCall(ToolCallPart),
-  ToolResult(ToolResultPart),
-  Thinking(ThinkingPart),
-}
+pub struct MessagePart(
+  pub  Either7<
+    TextPart,
+    AudioPart,
+    DocumentPart,
+    ImagePart,
+    ToolCallPart,
+    ToolResultPart,
+    ThinkingPart,
+  >,
+);
 
 impl From<MessagePart> for NativeMessagePart {
   fn from(value: MessagePart) -> Self {
-    match value {
-      MessagePart::Text(t) => NativeMessagePart::Text(NativeTextPart { text: t.text }),
-      MessagePart::Audio(a) => NativeMessagePart::Audio(NativeAudioPart {
-        data: a.data,
+    match value.0 {
+      Either7::A(t) => NativeMessagePart::Text(NativeTextPart { text: t.text }),
+      Either7::B(a) => NativeMessagePart::Audio(NativeAudioPart {
+        data: a.audio_data,
         mime_type: a.mime_type,
       }),
-      MessagePart::Document(d) => NativeMessagePart::Document(NativeDocumentPart {
-        data: d.data,
+      Either7::C(d) => NativeMessagePart::Document(NativeDocumentPart {
+        data: d.document_data,
         mime_type: d.mime_type,
         is_base64: d.is_base64,
       }),
-      MessagePart::Image(i) => NativeMessagePart::Image(NativeImagePart {
-        data: i.data,
+      Either7::D(i) => NativeMessagePart::Image(NativeImagePart {
+        data: i.image_data,
         mime_type: i.mime_type,
         is_base64: i.is_base64,
       }),
-      MessagePart::ToolCall(tc) => NativeMessagePart::ToolCall(NativeToolCallPart {
+      Either7::E(tc) => NativeMessagePart::ToolCall(NativeToolCallPart {
         id: tc.id,
         arguments: tc.arguments,
         name: tc.name,
       }),
-      MessagePart::ToolResult(tr) => NativeMessagePart::ToolResult(NativeToolResultPart {
+      Either7::F(tr) => NativeMessagePart::ToolResult(NativeToolResultPart {
         tool_call_id: tr.tool_call_id,
         result: tr.result,
       }),
-      MessagePart::Thinking(t) => NativeMessagePart::Thinking(NativeThinkingPart {
+      Either7::G(t) => NativeMessagePart::Thinking(NativeThinkingPart {
         thinking: t.thinking,
         signature: t.signature,
       }),
@@ -247,54 +264,64 @@ impl From<MessagePart> for NativeMessagePart {
 impl From<NativeMessagePart> for MessagePart {
   fn from(value: NativeMessagePart) -> Self {
     match value {
-      NativeMessagePart::Audio(a) => Self::Audio(AudioPart {
-        data: a.data,
+      NativeMessagePart::Audio(a) => Self(Either7::B(AudioPart {
+        r#type: "audio".to_string(),
+        audio_data: a.data,
         mime_type: a.mime_type,
-      }),
-      NativeMessagePart::Document(d) => Self::Document(DocumentPart {
-        data: d.data,
+      })),
+      NativeMessagePart::Document(d) => Self(Either7::C(DocumentPart {
+        r#type: "document".to_string(),
+        document_data: d.data,
         mime_type: d.mime_type,
         is_base64: d.is_base64,
-      }),
-      NativeMessagePart::Image(i) => Self::Image(ImagePart {
-        data: i.data,
+      })),
+      NativeMessagePart::Image(i) => Self(Either7::D(ImagePart {
+        r#type: "image".to_string(),
+        image_data: i.data,
         mime_type: i.mime_type,
         is_base64: i.is_base64,
-      }),
-      NativeMessagePart::Text(t) => Self::Text(TextPart { text: t.text }),
-      NativeMessagePart::Thinking(t) => Self::Thinking(ThinkingPart {
+      })),
+      NativeMessagePart::Text(t) => Self(Either7::A(TextPart {
+        text: t.text,
+        r#type: "text".to_string(),
+      })),
+      NativeMessagePart::Thinking(t) => Self(Either7::G(ThinkingPart {
+        r#type: "thinking".to_string(),
         thinking: t.thinking,
         signature: t.signature,
-      }),
-      NativeMessagePart::ToolCall(tc) => Self::ToolCall(ToolCallPart {
+      })),
+      NativeMessagePart::ToolCall(tc) => Self(Either7::E(ToolCallPart {
+        r#type: "toolCall".to_string(),
         id: tc.id,
         name: tc.name,
         arguments: tc.arguments,
-      }),
-      NativeMessagePart::ToolResult(tr) => Self::ToolResult(ToolResultPart {
+      })),
+      NativeMessagePart::ToolResult(tr) => Self(Either7::F(ToolResultPart {
+        r#type: "toolResult".to_string(),
         tool_call_id: tr.tool_call_id,
         result: tr.result,
-      }),
+      })),
       _ => unreachable!("Should not reach this arm"),
     }
   }
 }
 
-/// Create an `MessagePart.Image` from a URL, file path, or raw bytes.
+/// Create an `ImagePart` from a URL, file path, or raw bytes.
 ///
 /// @param input - Either a URL/path (`string`) or a `Buffer` containing image data.
-/// @returns A `MessagePart` ready to be added to a `Message`.
+/// @returns An `ImagePart` ready to be added to a `Message`.
 #[napi]
-pub fn image_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
+pub fn image_part(input: Either<String, Buffer>) -> napi::Result<ImagePart> {
   match input {
     Either::A(s) => match Url::parse(&s) {
       Ok(u) => {
         if matches!(u.scheme(), "http" | "https") {
-          Ok(MessagePart::Image(ImagePart {
-            data: s,
+          Ok(ImagePart {
+            r#type: "image".to_string(),
+            image_data: s,
             mime_type: None,
             is_base64: false,
-          }))
+          })
         } else {
           let data = fs::read(&s)?;
           let format = file_format::FileFormat::from_bytes(&data);
@@ -308,11 +335,12 @@ pub fn image_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
               ),
             ));
           }
-          Ok(MessagePart::Image(ImagePart {
-            data: BASE64_STANDARD.encode(&data),
+          Ok(ImagePart {
+            r#type: "image".to_string(),
+            image_data: BASE64_STANDARD.encode(&data),
             mime_type: Some(format.media_type().to_owned()),
             is_base64: true,
-          }))
+          })
         }
       }
       Err(_) => {
@@ -328,11 +356,12 @@ pub fn image_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
             ),
           ));
         }
-        Ok(MessagePart::Image(ImagePart {
-          data: BASE64_STANDARD.encode(&data),
+        Ok(ImagePart {
+          r#type: "image".to_string(),
+          image_data: BASE64_STANDARD.encode(&data),
           mime_type: Some(format.media_type().to_owned()),
           is_base64: true,
-        }))
+        })
       }
     },
     Either::B(buf) => {
@@ -348,30 +377,32 @@ pub fn image_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
           ),
         ));
       }
-      Ok(MessagePart::Image(ImagePart {
-        data: BASE64_STANDARD.encode(&data),
+      Ok(ImagePart {
+        r#type: "image".to_string(),
+        image_data: BASE64_STANDARD.encode(&data),
         mime_type: Some(format.media_type().to_owned()),
         is_base64: true,
-      }))
+      })
     }
   }
 }
 
-/// Create a `MessagePart.Document` from a URL, file path, or raw bytes.
+/// Create a `DocumentPart` from a URL, file path, or raw bytes.
 ///
 /// @param input - Either a URL/path (`string`) or a `Buffer` containing PDF data.
-/// @returns A `MessagePart` ready to be added to a `Message`.
+/// @returns A `DocumentPart` ready to be added to a `Message`.
 #[napi]
-pub fn document_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
+pub fn document_part(input: Either<String, Buffer>) -> napi::Result<DocumentPart> {
   match input {
     Either::A(s) => match Url::parse(&s) {
       Ok(u) => {
         if matches!(u.scheme(), "http" | "https") {
-          Ok(MessagePart::Document(DocumentPart {
-            data: s,
+          Ok(DocumentPart {
+            r#type: "document".to_string(),
+            document_data: s,
             mime_type: None,
             is_base64: false,
-          }))
+          })
         } else {
           let format = file_format::FileFormat::from_file(&s).map_err(|e| {
             napi::Error::new(
@@ -381,18 +412,20 @@ pub fn document_part(input: Either<String, Buffer>) -> napi::Result<MessagePart>
           })?;
           if format.media_type() == "application/pdf" {
             let data = fs::read(&s)?;
-            Ok(MessagePart::Document(DocumentPart {
-              data: BASE64_STANDARD.encode(data),
+            Ok(DocumentPart {
+              r#type: "document".to_string(),
+              document_data: BASE64_STANDARD.encode(data),
               mime_type: Some("application/pdf".to_string()),
               is_base64: true,
-            }))
+            })
           } else if format.media_type().starts_with("text/") {
             let data = fs::read_to_string(&s)?;
-            Ok(MessagePart::Document(DocumentPart {
-              data,
+            Ok(DocumentPart {
+              r#type: "document".to_string(),
+              document_data: data,
               mime_type: Some("text/plain".to_string()),
               is_base64: false,
-            }))
+            })
           } else {
             Err(napi::Error::new(
               napi::Status::InvalidArg,
@@ -413,18 +446,20 @@ pub fn document_part(input: Either<String, Buffer>) -> napi::Result<MessagePart>
         })?;
         if format.media_type() == "application/pdf" {
           let data = fs::read(&s)?;
-          Ok(MessagePart::Document(DocumentPart {
-            data: BASE64_STANDARD.encode(data),
+          Ok(DocumentPart {
+            r#type: "document".to_string(),
+            document_data: BASE64_STANDARD.encode(data),
             mime_type: Some("application/pdf".to_string()),
             is_base64: true,
-          }))
+          })
         } else if format.media_type().starts_with("text/") {
           let data = fs::read_to_string(&s)?;
-          Ok(MessagePart::Document(DocumentPart {
-            data,
+          Ok(DocumentPart {
+            r#type: "document".to_string(),
+            document_data: data,
             mime_type: Some("text/plain".to_string()),
             is_base64: false,
-          }))
+          })
         } else {
           Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -448,21 +483,22 @@ pub fn document_part(input: Either<String, Buffer>) -> napi::Result<MessagePart>
           ),
         ));
       }
-      Ok(MessagePart::Document(DocumentPart {
-        data: BASE64_STANDARD.encode(&data),
+      Ok(DocumentPart {
+        r#type: "document".to_string(),
+        document_data: BASE64_STANDARD.encode(&data),
         mime_type: Some(format.media_type().to_owned()),
         is_base64: true,
-      }))
+      })
     }
   }
 }
 
-/// Create a `MessagePart.Audio` from a file path or raw bytes.
+/// Create an `AudioPart` from a file path or raw bytes.
 ///
 /// @param input - Either a file path (`string`) or a `Buffer` containing audio data.
-/// @returns A `MessagePart` ready to be added to a `Message`.
+/// @returns An `AudioPart` ready to be added to a `Message`.
 #[napi]
-pub fn audio_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
+pub fn audio_part(input: Either<String, Buffer>) -> napi::Result<AudioPart> {
   let data: Vec<u8> = match input {
     Either::A(s) => fs::read(&s)?,
     Either::B(buf) => buf.into(),
@@ -478,46 +514,11 @@ pub fn audio_part(input: Either<String, Buffer>) -> napi::Result<MessagePart> {
       ),
     ));
   }
-  Ok(MessagePart::Audio(AudioPart {
-    data: BASE64_STANDARD.encode(&data),
+  Ok(AudioPart {
+    r#type: "audio".to_string(),
+    audio_data: BASE64_STANDARD.encode(&data),
     mime_type: format.media_type().to_owned(),
-  }))
-}
-
-#[napi]
-/// Create an `MessagePart.Text` from text content.
-///
-/// @param part - Text to be added to the part
-/// @returns A `MessagePart` ready to be added to a `Message`.
-pub fn text_part(part: TextPart) -> MessagePart {
-  MessagePart::Text(part)
-}
-
-#[napi]
-/// Create an `MessagePart.ToolCall` from tool call data.
-///
-/// @param part - tool call data
-/// @returns A `MessagePart` ready to be added to a `Message`.
-pub fn toool_call_part(part: ToolCallPart) -> MessagePart {
-  MessagePart::ToolCall(part)
-}
-
-#[napi]
-/// Create an `MessagePart.ToolResult` from tool result data.
-///
-/// @param part - tool result data.
-/// @returns A `MessagePart` ready to be added to a `Message`.
-pub fn tool_result_part(part: ToolResultPart) -> MessagePart {
-  MessagePart::ToolResult(part)
-}
-
-#[napi]
-/// Create an `MessagePart.Thinking` from a thinking trace and an optional cryptographic signature.
-///
-/// @param part - thinking trace and signature.
-/// @returns A `MessagePart` ready to be added to a `Message`.
-pub fn thinking_part(part: ThinkingPart) -> MessagePart {
-  MessagePart::Thinking(part)
+  })
 }
 
 /// A single turn in the conversation.
@@ -728,12 +729,14 @@ impl From<NativeLLMResponse> for LLMResponse {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct LLMStreamingDelta {
+  #[napi(js_name = "type", ts_type = "\"textDelta\"")]
+  pub r#type: String,
   /// Identifier of the response this delta belongs to.
   pub response_id: String,
   /// Unix timestamp of the response, when provided by the API.
   pub created_at: Option<u32>,
   /// Chunk of generated text, if any.
-  pub delta: Option<String>,
+  pub text_delta: Option<String>,
   /// Whether this delta signals the end of the stream.
   pub stop: bool,
 }
@@ -741,9 +744,10 @@ pub struct LLMStreamingDelta {
 impl From<NativeLLMStreamingDelta> for LLMStreamingDelta {
   fn from(value: NativeLLMStreamingDelta) -> Self {
     Self {
+      r#type: "textDelta".to_string(),
       response_id: value.response_id,
       created_at: value.created_at.map(|c| c as u32),
-      delta: value.delta,
+      text_delta: value.delta,
       stop: value.stop,
     }
   }
@@ -753,20 +757,23 @@ impl From<NativeLLMStreamingDelta> for LLMStreamingDelta {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct LLMThinkingDelta {
+  #[napi(js_name = "type", ts_type = "\"thinkingDelta\"")]
+  pub r#type: String,
   /// Identifier of the response this delta belongs to.
   pub response_id: String,
   /// Unix timestamp of the response, when provided by the API.
   pub created_at: Option<u32>,
   /// Chunk of reasoning text, if any.
-  pub delta: Option<String>,
+  pub thinking_delta: Option<String>,
 }
 
 impl From<NativeLLMThinkingDelta> for LLMThinkingDelta {
   fn from(value: NativeLLMThinkingDelta) -> Self {
     Self {
+      r#type: "thinkingDelta".to_string(),
       response_id: value.response_id,
       created_at: value.created_at.map(|c| c as u32),
-      delta: value.delta,
+      thinking_delta: value.delta,
     }
   }
 }
@@ -775,6 +782,8 @@ impl From<NativeLLMThinkingDelta> for LLMThinkingDelta {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct LLMToolDelta {
+  #[napi(js_name = "type", ts_type = "\"toolDelta\"")]
+  pub r#type: String,
   /// Identifier for the in-progress tool call.
   pub tool_call_id: String,
   /// Name of the tool being called.
@@ -787,6 +796,8 @@ pub struct LLMToolDelta {
 #[napi(object)]
 #[derive(Debug, Clone)]
 pub struct LLMStreamingComplete {
+  #[napi(js_name = "type", ts_type = "\"complete\"")]
+  pub r#type: String,
   /// Provider-generated response identifier.
   pub id: String,
   /// Unix timestamp of the response, when provided by the API.
@@ -804,34 +815,11 @@ pub struct LLMStreamingComplete {
 }
 
 /// A single item emitted by a streaming LLM response.
-#[napi]
+#[napi(transparent)]
 #[derive(Debug, Clone)]
-pub enum LLMStreamingResponse {
-  /// A chunk of generated text.
-  Delta(LLMStreamingDelta),
-  /// A chunk of tool call arguments.
-  ToolDelta(LLMToolDelta),
-  /// A chunk of reasoning text.
-  ThinkingDelta(LLMThinkingDelta),
-  /// The final aggregated response.
-  Complete(LLMStreamingComplete),
-}
-
-#[napi]
-/// Get the streaming response out of a streamed chunk in the Llm.streamResponse method.
-///
-/// @param chunk - An LLMStreamingResponse chunk
-/// @returns A `LLMStreamingDelta`, `LLMToolDelta`, `LLMThinkingDelta` or a `LLMStreamingComplete` message, based on the content of the chunk.
-pub fn streaming_response(
-  chunk: LLMStreamingResponse,
-) -> Either4<LLMStreamingDelta, LLMToolDelta, LLMThinkingDelta, LLMStreamingComplete> {
-  match chunk {
-    LLMStreamingResponse::Delta(d) => Either4::A(d.clone()),
-    LLMStreamingResponse::ToolDelta(t) => Either4::B(t.clone()),
-    LLMStreamingResponse::ThinkingDelta(t) => Either4::C(t.clone()),
-    LLMStreamingResponse::Complete(c) => Either4::D(c.clone()),
-  }
-}
+pub struct LLMStreamingResponse(
+  pub Either4<LLMStreamingDelta, LLMToolDelta, LLMThinkingDelta, LLMStreamingComplete>,
+);
 
 impl From<NativeLLMStreamingResponse> for LLMStreamingResponse {
   fn from(value: NativeLLMStreamingResponse) -> Self {
@@ -851,13 +839,15 @@ impl From<NativeLLMStreamingResponse> for LLMStreamingResponse {
         if let Some(tc) = c.tool_calls {
           for t in tc {
             tool_calls.get_or_insert_with(Vec::new).push(ToolCallPart {
+              r#type: "toolCall".to_string(),
               id: t.id,
               name: t.name,
               arguments: t.arguments,
             });
           }
         }
-        Self::Complete(LLMStreamingComplete {
+        Self(Either4::D(LLMStreamingComplete {
+          r#type: "complete".to_string(),
           id: c.id,
           created_at: c.created_at.map(|c| c as u32),
           message: c.message.into(),
@@ -871,17 +861,16 @@ impl From<NativeLLMStreamingResponse> for LLMStreamingResponse {
             other_tokens: u.other_tokens,
           }),
           tool_calls,
-        })
+        }))
       }
-      NativeLLMStreamingResponse::Delta(d) => LLMStreamingResponse::Delta(d.into()),
-      NativeLLMStreamingResponse::ThinkingDelta(td) => {
-        LLMStreamingResponse::ThinkingDelta(td.into())
-      }
-      NativeLLMStreamingResponse::ToolDelta(td) => LLMStreamingResponse::ToolDelta(LLMToolDelta {
+      NativeLLMStreamingResponse::Delta(d) => Self(Either4::A(d.into())),
+      NativeLLMStreamingResponse::ThinkingDelta(td) => Self(Either4::C(td.into())),
+      NativeLLMStreamingResponse::ToolDelta(td) => Self(Either4::B(LLMToolDelta {
+        r#type: "toolDelta".to_string(),
         tool_call_id: td.tool_call_id,
         name: td.name,
         partial_arguments: td.partial_arguments,
-      }),
+      })),
     }
   }
 }

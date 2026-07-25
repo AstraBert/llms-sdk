@@ -97,7 +97,7 @@ impl LLM {
   pub async fn stream_response(
     &self,
     request: LLMRequest,
-    #[napi(ts_arg_type = "(err: Error | null, chunk?: LLMStreamingResponse) => void")]
+    #[napi(ts_arg_type = "(err: Error | null, chunk?: LlmStreamingResponse) => void")]
     callback: ThreadsafeFunction<LLMStreamingResponse, ()>,
   ) -> napi::Result<()> {
     let mut stream = self

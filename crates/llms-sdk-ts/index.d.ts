@@ -33,7 +33,7 @@ export declare class Llm {
    */
   streamResponse(
     request: LlmRequest,
-    callback: (err: Error | null, chunk?: LLMStreamingResponse) => void,
+    callback: (err: Error | null, chunk?: LlmStreamingResponse) => void,
   ): Promise<void>
 }
 export type LLM = Llm
@@ -45,33 +45,35 @@ export declare const enum ApiType {
 }
 
 /**
- * Create a `MessagePart.Audio` from a file path or raw bytes.
+ * Create an `AudioPart` from a file path or raw bytes.
  *
  * @param input - Either a file path (`string`) or a `Buffer` containing audio data.
- * @returns A `MessagePart` ready to be added to a `Message`.
+ * @returns An `AudioPart` ready to be added to a `Message`.
  */
-export declare function audioPart(input: string | Buffer): MessagePart
+export declare function audioPart(input: string | Buffer): AudioPart
 
 /** Audio segment of a message. */
 export interface AudioPart {
+  type: 'audio'
   /** Base64-encoded audio data. */
-  data: string
+  audioData: string
   /** MIME type of the audio (e.g. `audio/mpeg`). */
   mimeType: string
 }
 
 /**
- * Create a `MessagePart.Document` from a URL, file path, or raw bytes.
+ * Create a `DocumentPart` from a URL, file path, or raw bytes.
  *
  * @param input - Either a URL/path (`string`) or a `Buffer` containing PDF data.
- * @returns A `MessagePart` ready to be added to a `Message`.
+ * @returns A `DocumentPart` ready to be added to a `Message`.
  */
-export declare function documentPart(input: string | Buffer): MessagePart
+export declare function documentPart(input: string | Buffer): DocumentPart
 
 /** Document segment of a message (PDF or plain text). */
 export interface DocumentPart {
+  type: 'document'
   /** Raw document data (base64-encoded) or a URL. */
-  data: string
+  documentData: string
   /** MIME type of the document, when known. */
   mimeType?: string
   /** Whether `data` is base64-encoded (`true`) or a URL (`false`). */
@@ -79,17 +81,18 @@ export interface DocumentPart {
 }
 
 /**
- * Create an `MessagePart.Image` from a URL, file path, or raw bytes.
+ * Create an `ImagePart` from a URL, file path, or raw bytes.
  *
  * @param input - Either a URL/path (`string`) or a `Buffer` containing image data.
- * @returns A `MessagePart` ready to be added to a `Message`.
+ * @returns An `ImagePart` ready to be added to a `Message`.
  */
-export declare function imagePart(input: string | Buffer): MessagePart
+export declare function imagePart(input: string | Buffer): ImagePart
 
 /** Image segment of a message. */
 export interface ImagePart {
+  type: 'image'
   /** Raw image data (base64-encoded) or a URL. */
-  data: string
+  imageData: string
   /** MIME type of the image, when known. */
   mimeType?: string
   /** Whether `data` is base64-encoded (`true`) or a URL (`false`). */
@@ -144,6 +147,7 @@ export interface LlmResponse {
 
 /** Final aggregated payload emitted at the end of a streaming response. */
 export interface LlmStreamingComplete {
+  type: 'complete'
   /** Provider-generated response identifier. */
   id: string
   /** Unix timestamp of the response, when provided by the API. */
@@ -162,35 +166,34 @@ export interface LlmStreamingComplete {
 
 /** A partial text delta in a streaming response. */
 export interface LlmStreamingDelta {
+  type: 'textDelta'
   /** Identifier of the response this delta belongs to. */
   responseId: string
   /** Unix timestamp of the response, when provided by the API. */
   createdAt?: number
   /** Chunk of generated text, if any. */
-  delta?: string
+  textDelta?: string
   /** Whether this delta signals the end of the stream. */
   stop: boolean
 }
 
 /** A single item emitted by a streaming LLM response. */
-export type LLMStreamingResponse =
-  | { type: 'Delta'; field0: LlmStreamingDelta }
-  | { type: 'ToolDelta'; field0: LlmToolDelta }
-  | { type: 'ThinkingDelta'; field0: LlmThinkingDelta }
-  | { type: 'Complete'; field0: LlmStreamingComplete }
+export type LlmStreamingResponse = LlmStreamingDelta | LlmToolDelta | LlmThinkingDelta | LlmStreamingComplete
 
 /** A partial reasoning/thinking delta in a streaming response. */
 export interface LlmThinkingDelta {
+  type: 'thinkingDelta'
   /** Identifier of the response this delta belongs to. */
   responseId: string
   /** Unix timestamp of the response, when provided by the API. */
   createdAt?: number
   /** Chunk of reasoning text, if any. */
-  delta?: string
+  thinkingDelta?: string
 }
 
 /** A partial tool call argument delta in a streaming response. */
 export interface LlmToolDelta {
+  type: 'toolDelta'
   /** Identifier for the in-progress tool call. */
   toolCallId: string
   /** Name of the tool being called. */
@@ -222,14 +225,7 @@ export interface Message {
 }
 
 /** A single item inside a [`Message`]'s content array. */
-export type MessagePart =
-  | { type: 'Text'; field0: TextPart }
-  | { type: 'Image'; field0: ImagePart }
-  | { type: 'Document'; field0: DocumentPart }
-  | { type: 'Audio'; field0: AudioPart }
-  | { type: 'ToolCall'; field0: ToolCallPart }
-  | { type: 'ToolResult'; field0: ToolResultPart }
-  | { type: 'Thinking'; field0: ThinkingPart }
+export type MessagePart = TextPart | AudioPart | DocumentPart | ImagePart | ToolCallPart | ToolResultPart | ThinkingPart
 
 /** Role of a message in the conversation. */
 export declare const enum MessageRole {
@@ -272,39 +268,15 @@ export interface RetryPolicy {
   base: number
 }
 
-/**
- * Get the streaming response out of a streamed chunk in the Llm.streamResponse method.
- *
- * @param chunk - An LLMStreamingResponse chunk
- * @returns A `LLMStreamingDelta`, `LLMToolDelta`, `LLMThinkingDelta` or a `LLMStreamingComplete` message, based on the content of the chunk.
- */
-export declare function streamingResponse(
-  chunk: LLMStreamingResponse,
-): LlmStreamingDelta | LlmToolDelta | LlmThinkingDelta | LlmStreamingComplete
-
-/**
- * Create an `MessagePart.Text` from text content.
- *
- * @param part - Text to be added to the part
- * @returns A `MessagePart` ready to be added to a `Message`.
- */
-export declare function textPart(part: TextPart): MessagePart
-
 /** Plain-text segment of a message. */
 export interface TextPart {
+  type: 'text'
   text: string
 }
 
-/**
- * Create an `MessagePart.Thinking` from a thinking trace and an optional cryptographic signature.
- *
- * @param part - thinking trace and signature.
- * @returns A `MessagePart` ready to be added to a `Message`.
- */
-export declare function thinkingPart(part: ThinkingPart): MessagePart
-
 /** A reasoning/thinking block produced by the model. */
 export interface ThinkingPart {
+  type: 'thinking'
   /** The model's internal reasoning text. */
   thinking: string
   /** Cryptographic signature verifying the reasoning, when provided. */
@@ -323,6 +295,7 @@ export interface Tool {
 
 /** A tool call issued by the model. */
 export interface ToolCallPart {
+  type: 'toolCall'
   /** Unique identifier for this tool call. */
   id: string
   /** Name of the tool being invoked. */
@@ -338,26 +311,11 @@ export declare const enum ToolChoice {
   Required = 'required',
 }
 
-/**
- * Create an `MessagePart.ToolResult` from tool result data.
- *
- * @param part - tool result data.
- * @returns A `MessagePart` ready to be added to a `Message`.
- */
-export declare function toolResultPart(part: ToolResultPart): MessagePart
-
 /** Result returned to the model after executing a tool call. */
 export interface ToolResultPart {
+  type: 'toolResult'
   /** Identifier of the original tool call this result belongs to. */
   toolCallId: string
   /** JSON-encoded result payload. */
   result: string
 }
-
-/**
- * Create an `MessagePart.ToolCall` from tool call data.
- *
- * @param part - tool call data
- * @returns A `MessagePart` ready to be added to a `Message`.
- */
-export declare function tooolCallPart(part: ToolCallPart): MessagePart
