@@ -25,7 +25,7 @@ Prebuilt binaries are included for the most common platforms. If your platform i
 ## Quick start
 
 ```typescript
-import { Llm, ApiType, MessageRole, textPart } from '@cle-does-things/llms-sdk'
+import { Llm, ApiType, MessageRole } from '@cle-does-things/llms-sdk'
 
 async function main() {
   const request = {
@@ -35,7 +35,7 @@ async function main() {
     messages: [
       {
         role: MessageRole.User,
-        content: textPart({ text: 'Hello!' }),
+        content: [{ text: 'Hello!', type: 'text' }],
       },
     ],
     maxOutputTokens: 256,
@@ -69,7 +69,7 @@ import { imagePart } from '@cle-does-things/llms-sdk'
 const message = {
   role: MessageRole.User,
   content: [
-    textPart({ text: 'Describe this image.' }),
+    { text: 'Describe this image.', type: 'text' },
     imagePart('files/cat.jpeg'), // or a Buffer, or a URL
   ],
 }
@@ -78,12 +78,12 @@ const message = {
 ### Audio (OpenAI only)
 
 ```typescript
-import { audioPart, textPart } from '@cle-does-things/llms-sdk'
+import { audioPart } from '@cle-does-things/llms-sdk'
 
 const message = {
   role: MessageRole.User,
   content: [
-    textPart({ text: 'Describe this audio.' }),
+    { text: 'Describe this audio.', type: 'text' },
     audioPart('files/audio.wav'), // or a Buffer
   ],
 }
@@ -92,12 +92,12 @@ const message = {
 ### Document (Anthropic only)
 
 ```typescript
-import { documentPart, textPart } from '@cle-does-things/llms-sdk'
+import { documentPart } from '@cle-does-things/llms-sdk'
 
 const message = {
   role: MessageRole.User,
   content: [
-    textPart({ text: 'Summarize this document.' }),
+    { text: 'Summarize this document.', type: 'text' },
     documentPart('files/file.pdf'), // or a Buffer, or a URL
   ],
 }
@@ -167,17 +167,17 @@ await llm.streamResponse(request, (err, chunk) => {
   if (!chunk) return
 
   switch (chunk.type) {
-    case 'Delta':
-      process.stdout.write(chunk.field0.delta ?? '')
+    case 'delta':
+      process.stdout.write(chunk.textDelta ?? '')
       break
-    case 'ToolDelta':
-      console.log('Tool delta:', chunk.field0)
+    case 'toolDelta':
+      console.log('Tool delta:', JSON.stringify(chunk, undefined, 2))
       break
-    case 'ThinkingDelta':
-      console.log('Thinking:', chunk.field0.delta)
+    case 'thinkingDelta':
+      console.log('Thinking:', chunk.thinkingDelta)
       break
-    case 'Complete':
-      console.log('\nDone:', chunk.field0.message)
+    case 'complete':
+      console.log('\nDone:', JSON.stringify(chunk.message, undefined, 2))
       break
   }
 })
@@ -208,7 +208,7 @@ All public types are exported from `index.d.ts`. Key interfaces include:
 - `ImagePart`, `AudioPart`, `DocumentPart` – multimodal parts
 - `Tool`, `ToolCallPart`, `ToolResultPart` – tool use
 - `OutputFormat` – structured output schema
-- `LLMStreamingResponse` – streaming discriminated union
+- `LlmStreamingResponse` – streaming discriminated union
 - `RetryPolicy` – retry configuration
 
 ## Tests
