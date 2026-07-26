@@ -3,13 +3,17 @@ use pyo3::prelude::*;
 /// A Python module implemented in Rust.
 #[pymodule]
 mod llms_sdk {
-    use ::llms_sdk::ImagePart;
-    use llms_sdk::{AudioPart, DocumentPart};
+    use std::fs;
+
+    use base64::prelude::*;
+    use either::Either;
+    use llms_sdk::{ALLOWED_IMAGE_TYPES, AudioPart};
     use pyo3::{
         exceptions::{PyAttributeError, PyKeyError, PyValueError},
         prelude::*,
-        types::{PyDict, PyType},
+        types::PyDict,
     };
+    use url::Url;
 
     #[pyclass(eq, hash, frozen, from_py_object)]
     #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
@@ -67,7 +71,7 @@ mod llms_sdk {
         }
     }
 
-    #[pyclass]
+    #[pyclass(frozen)]
     #[derive(Debug, FromPyObject)]
     #[allow(clippy::enum_variant_names)]
     pub enum MessagePart {
@@ -387,6 +391,78 @@ mod llms_sdk {
             }
         }
 
+        fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+            match self {
+                Self::TextPart { text, r#type: tp } => {
+                    d.set_item("type", tp.__str__())?;
+                    d.set_item("text", text)?;
+                }
+                Self::ThinkingPart {
+                    thinking,
+                    signature,
+                    r#type: tp,
+                } => {
+                    d.set_item("type", tp.__str__())?;
+                    d.set_item("thinking", thinking)?;
+                    d.set_item("signature", signature)?;
+                }
+                Self::ToolCallPart {
+                    id,
+                    name,
+                    arguments,
+                    r#type: tp,
+                } => {
+                    d.set_item("type", tp.__str__())?;
+                    d.set_item("id", id)?;
+                    d.set_item("name", name)?;
+                    d.set_item("arguments", arguments)?;
+                }
+                Self::ToolResultPart {
+                    tool_call_id,
+                    result,
+                    r#type: tp,
+                } => {
+                    d.set_item("type", tp.__str__())?;
+                    d.set_item("tool_call_id", tool_call_id)?;
+                    d.set_item("result", result)?;
+                }
+                Self::ImagePart {
+                    image_data,
+                    is_base64,
+                    mime_type,
+                    r#type: tp,
+                } => {
+                    d.set_item("type", tp.__str__())?;
+                    d.set_item("image_data", image_data)?;
+                    d.set_item("mime_type", mime_type)?;
+                    d.set_item("is_base64", is_base64)?;
+                }
+                Self::DocumentPart {
+                    document_data,
+                    is_base64,
+                    mime_type,
+                    r#type: tp,
+                } => {
+                    d.set_item("type", tp.__str__())?;
+                    d.set_item("document_data", document_data)?;
+                    d.set_item("mime_type", mime_type)?;
+                    d.set_item("is_base64", is_base64)?;
+                }
+                Self::AudioPart {
+                    audio_data,
+                    mime_type,
+                    r#type: tp,
+                } => {
+                    d.set_item("type", tp.__str__())?;
+                    d.set_item("audio_data", audio_data)?;
+                    d.set_item("mime_type", mime_type)?;
+                }
+            }
+
+            Ok(d)
+        }
+
         #[getter]
         fn text(&self) -> PyResult<String> {
             match self {
@@ -579,142 +655,231 @@ mod llms_sdk {
                 )),
             }
         }
+    }
 
-        #[classmethod]
-        fn image_part_from_file(_cls: &Bound<'_, PyType>, file: String) -> PyResult<Self> {
-            let intermediate = ImagePart::try_from_file(file)?;
-            Ok(Self::ImagePart {
-                r#type: PartType::Image,
-                image_data: intermediate.data,
-                is_base64: intermediate.is_base64,
-                mime_type: intermediate.mime_type,
-            })
-        }
-
-        #[classmethod]
-        fn image_part_from_bytes(_cls: &Bound<'_, PyType>, data: Vec<u8>) -> PyResult<Self> {
-            let intermediate = ImagePart::try_from_bytes(data)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok(Self::ImagePart {
-                r#type: PartType::Image,
-                image_data: intermediate.data,
-                is_base64: intermediate.is_base64,
-                mime_type: intermediate.mime_type,
-            })
-        }
-
-        #[classmethod]
-        fn image_part_from_url(_cls: &Bound<'_, PyType>, url: String) -> Self {
-            Self::ImagePart {
-                r#type: PartType::Image,
-                image_data: url,
-                is_base64: false,
-                mime_type: None,
+    #[pyfunction]
+    #[pyo3(signature = (input, /), name = "ImagePart")]
+    pub fn image_part(input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
+        match input {
+            Either::Left(s) => match Url::parse(&s) {
+                Ok(u) => {
+                    if matches!(u.scheme(), "http" | "https") {
+                        Ok(MessagePart::ImagePart {
+                            r#type: PartType::Image,
+                            image_data: s,
+                            mime_type: None,
+                            is_base64: false,
+                        })
+                    } else {
+                        let data = fs::read(&s)?;
+                        let format = file_format::FileFormat::from_bytes(&data);
+                        if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
+                            return Err(PyValueError::new_err(format!(
+                                "Unsupported image type: {}. The supported image types are: {}",
+                                format.media_type(),
+                                ALLOWED_IMAGE_TYPES.join(", ")
+                            )));
+                        }
+                        Ok(MessagePart::ImagePart {
+                            r#type: PartType::Image,
+                            image_data: BASE64_STANDARD.encode(&data),
+                            mime_type: Some(format.media_type().to_owned()),
+                            is_base64: true,
+                        })
+                    }
+                }
+                Err(_) => {
+                    let data = fs::read(&s)?;
+                    let format = file_format::FileFormat::from_bytes(&data);
+                    if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
+                        return Err(PyValueError::new_err(format!(
+                            "Unsupported image type: {}. The supported image types are: {}",
+                            format.media_type(),
+                            ALLOWED_IMAGE_TYPES.join(", ")
+                        )));
+                    }
+                    Ok(MessagePart::ImagePart {
+                        r#type: PartType::Image,
+                        image_data: BASE64_STANDARD.encode(&data),
+                        mime_type: Some(format.media_type().to_owned()),
+                        is_base64: true,
+                    })
+                }
+            },
+            Either::Right(data) => {
+                let format = file_format::FileFormat::from_bytes(&data);
+                if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
+                    return Err(PyValueError::new_err(format!(
+                        "Unsupported image type: {}. The supported image types are: {}",
+                        format.media_type(),
+                        ALLOWED_IMAGE_TYPES.join(", ")
+                    )));
+                }
+                Ok(MessagePart::ImagePart {
+                    r#type: PartType::Image,
+                    image_data: BASE64_STANDARD.encode(&data),
+                    mime_type: Some(format.media_type().to_owned()),
+                    is_base64: true,
+                })
             }
         }
+    }
 
-        #[classmethod]
-        fn audio_part_from_bytes(_cls: &Bound<'_, PyType>, data: Vec<u8>) -> PyResult<Self> {
-            let intermediate = AudioPart::try_from_bytes(data)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok(Self::AudioPart {
-                r#type: PartType::Audio,
-                audio_data: intermediate.data,
-                mime_type: intermediate.mime_type,
-            })
-        }
-
-        #[classmethod]
-        fn audio_part_from_file(_cls: &Bound<'_, PyType>, file: String) -> PyResult<Self> {
-            let intermediate = AudioPart::try_from_file(file)?;
-            Ok(Self::AudioPart {
-                r#type: PartType::Audio,
-                audio_data: intermediate.data,
-                mime_type: intermediate.mime_type,
-            })
-        }
-
-        #[classmethod]
-        fn document_part_from_pdf_file(_cls: &Bound<'_, PyType>, file: String) -> PyResult<Self> {
-            let intermediate = DocumentPart::try_from_pdf_file(file)?;
-            Ok(Self::DocumentPart {
-                r#type: PartType::Document,
-                document_data: intermediate.data,
-                mime_type: intermediate.mime_type,
-                is_base64: intermediate.is_base64,
-            })
-        }
-
-        #[classmethod]
-        fn document_part_from_pdf_bytes(_cls: &Bound<'_, PyType>, data: Vec<u8>) -> PyResult<Self> {
-            let intermediate = DocumentPart::try_from_pdf_bytes(data)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok(Self::DocumentPart {
-                r#type: PartType::Document,
-                document_data: intermediate.data,
-                mime_type: intermediate.mime_type,
-                is_base64: intermediate.is_base64,
-            })
-        }
-
-        #[classmethod]
-        fn document_part_from_url(_cls: &Bound<'_, PyType>, url: String) -> Self {
-            Self::DocumentPart {
-                r#type: PartType::Image,
-                document_data: url,
-                is_base64: false,
-                mime_type: None,
+    #[pyfunction]
+    #[pyo3(signature = (input, /), name = "AudioPart")]
+    pub fn audio_part(input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
+        match input {
+            Either::Left(file) => {
+                let intermediate = AudioPart::try_from_file(file)?;
+                Ok(MessagePart::AudioPart {
+                    r#type: PartType::Audio,
+                    audio_data: intermediate.data,
+                    mime_type: intermediate.mime_type,
+                })
+            }
+            Either::Right(data) => {
+                let intermediate = AudioPart::try_from_bytes(data)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                Ok(MessagePart::AudioPart {
+                    r#type: PartType::Audio,
+                    audio_data: intermediate.data,
+                    mime_type: intermediate.mime_type,
+                })
             }
         }
+    }
 
-        #[classmethod]
-        fn text_part(_cls: &Bound<'_, PyType>, text: String) -> Self {
-            Self::TextPart {
-                r#type: PartType::Text,
-                text,
+    #[pyfunction]
+    #[pyo3(signature = (input, /), name = "DocumentPart")]
+    pub fn document_part(input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
+        match input {
+            Either::Left(s) => match Url::parse(&s) {
+                Ok(u) => {
+                    if matches!(u.scheme(), "http" | "https") {
+                        Ok(MessagePart::DocumentPart {
+                            r#type: PartType::Document,
+                            document_data: s,
+                            mime_type: None,
+                            is_base64: false,
+                        })
+                    } else {
+                        let format = file_format::FileFormat::from_file(&s).map_err(|e| {
+                            PyValueError::new_err(format!(
+                                "Could not infer format from file: {}",
+                                e
+                            ))
+                        })?;
+                        if format.media_type() == "application/pdf" {
+                            let data = fs::read(&s)?;
+                            Ok(MessagePart::DocumentPart {
+                                r#type: PartType::Document,
+                                document_data: BASE64_STANDARD.encode(data),
+                                mime_type: Some("application/pdf".to_string()),
+                                is_base64: true,
+                            })
+                        } else if format.media_type().starts_with("text/") {
+                            let data = fs::read_to_string(&s)?;
+                            Ok(MessagePart::DocumentPart {
+                                r#type: PartType::Document,
+                                document_data: data,
+                                mime_type: Some("text/plain".to_string()),
+                                is_base64: false,
+                            })
+                        } else {
+                            Err(PyValueError::new_err(format!(
+                                "Expected either a PDF or a text file, found media type: {}",
+                                format.media_type()
+                            )))
+                        }
+                    }
+                }
+                Err(_) => {
+                    let format = file_format::FileFormat::from_file(&s).map_err(|e| {
+                        PyValueError::new_err(format!("Could not infer format from file: {}", e))
+                    })?;
+                    if format.media_type() == "application/pdf" {
+                        let data = fs::read(&s)?;
+                        Ok(MessagePart::DocumentPart {
+                            r#type: PartType::Document,
+                            document_data: BASE64_STANDARD.encode(data),
+                            mime_type: Some("application/pdf".to_string()),
+                            is_base64: true,
+                        })
+                    } else if format.media_type().starts_with("text/") {
+                        let data = fs::read_to_string(&s)?;
+                        Ok(MessagePart::DocumentPart {
+                            r#type: PartType::Document,
+                            document_data: data,
+                            mime_type: Some("text/plain".to_string()),
+                            is_base64: false,
+                        })
+                    } else {
+                        Err(PyValueError::new_err(format!(
+                            "Expected either a PDF or a text file, found media type: {}",
+                            format.media_type()
+                        )))
+                    }
+                }
+            },
+            Either::Right(data) => {
+                let format = file_format::FileFormat::from_bytes(&data);
+                if format.media_type() != "application/pdf" {
+                    return Err(PyValueError::new_err(format!(
+                        "Input file should be a PDF, found media type: {}",
+                        format.media_type()
+                    )));
+                }
+                Ok(MessagePart::DocumentPart {
+                    r#type: PartType::Document,
+                    document_data: BASE64_STANDARD.encode(&data),
+                    mime_type: Some(format.media_type().to_owned()),
+                    is_base64: true,
+                })
             }
         }
+    }
 
-        #[classmethod]
-        fn tool_call_part(
-            _cls: &Bound<'_, PyType>,
-            tool_call_id: String,
-            function_name: String,
-            arguments: String,
-        ) -> Self {
-            Self::ToolCallPart {
-                r#type: PartType::ToolCall,
-                id: tool_call_id,
-                name: function_name,
-                arguments,
-            }
+    #[pyfunction]
+    #[pyo3(name = "TextPart")]
+    pub fn text_part(text: String) -> MessagePart {
+        MessagePart::TextPart {
+            r#type: PartType::Text,
+            text,
         }
+    }
 
-        #[classmethod]
-        fn tool_result_part(
-            _cls: &Bound<'_, PyType>,
-            tool_call_id: String,
-            result: String,
-        ) -> Self {
-            Self::ToolResultPart {
-                r#type: PartType::ToolResult,
-                tool_call_id,
-                result,
-            }
+    #[pyfunction]
+    #[pyo3(name = "ToolCallPart")]
+    pub fn tool_call_part(
+        tool_call_id: String,
+        function_name: String,
+        arguments: String,
+    ) -> MessagePart {
+        MessagePart::ToolCallPart {
+            r#type: PartType::ToolCall,
+            id: tool_call_id,
+            name: function_name,
+            arguments,
         }
+    }
 
-        #[classmethod]
-        #[pyo3(signature = (thinking, signature = None))]
-        fn thinking_part(
-            _cls: &Bound<'_, PyType>,
-            thinking: String,
-            signature: Option<String>,
-        ) -> Self {
-            Self::ThinkingPart {
-                r#type: PartType::Thinking,
-                thinking,
-                signature,
-            }
+    #[pyfunction]
+    #[pyo3(name = "ToolResultPart")]
+    pub fn tool_result_part(tool_call_id: String, result: String) -> MessagePart {
+        MessagePart::ToolResultPart {
+            r#type: PartType::ToolResult,
+            tool_call_id,
+            result,
+        }
+    }
+
+    #[pyfunction]
+    #[pyo3(signature = (thinking, signature = None), name = "ThinkingPart")]
+    pub fn thinking_part(thinking: String, signature: Option<String>) -> MessagePart {
+        MessagePart::ThinkingPart {
+            r#type: PartType::Thinking,
+            thinking,
+            signature,
         }
     }
 }
