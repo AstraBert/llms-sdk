@@ -7,12 +7,31 @@ mod llms_sdk {
 
     use base64::prelude::*;
     use either::Either;
-    use llms_sdk::{ALLOWED_IMAGE_TYPES, AudioPart};
+    use llms_sdk::ApiType as NativeApiType;
+    // use llms_sdk::LLM as NativeLLM;
+    use llms_sdk::LLMRequest as NativeLLMRequest;
+    use llms_sdk::Message as NativeMessage;
+    use llms_sdk::MessagePart as NativeMessagePart;
+    use llms_sdk::MessageRole as NativeMessageRole;
+    use llms_sdk::OutputFormat as NativeOutputFormat;
+    use llms_sdk::ReasoningEffort as NativeReasoningEffort;
+    use llms_sdk::RetryPolicy as NativeRetryPolicy;
+    use llms_sdk::Tool as NativeTool;
+    use llms_sdk::ToolChoice as NativeToolChoice;
+    use llms_sdk::{
+        ALLOWED_IMAGE_TYPES, AudioPart, DocumentPart, ImagePart, TextPart, ThinkingPart,
+        ToolCallPart, ToolResultPart,
+    };
     use pyo3::{
         exceptions::{PyAttributeError, PyKeyError, PyValueError},
         prelude::*,
         types::PyDict,
     };
+    use pythonize::depythonize;
+    use pythonize::pythonize;
+    use schemars::Schema;
+    use serde_json::Value;
+    use std::time::Duration;
     use url::Url;
 
     #[pyclass(eq, hash, frozen, from_py_object)]
@@ -119,6 +138,77 @@ mod llms_sdk {
             tool_call_id: String,
             result: String,
         },
+    }
+
+    impl MessagePart {
+        fn as_clone(&self) -> Self {
+            match self {
+                Self::TextPart { text, r#type: tp } => Self::TextPart {
+                    r#type: tp.to_owned(),
+                    text: text.clone(),
+                },
+                Self::AudioPart {
+                    audio_data,
+                    mime_type,
+                    r#type: tp,
+                } => Self::AudioPart {
+                    r#type: tp.to_owned(),
+                    audio_data: audio_data.clone(),
+                    mime_type: mime_type.clone(),
+                },
+                Self::ImagePart {
+                    image_data,
+                    mime_type,
+                    r#type: tp,
+                    is_base64,
+                } => Self::ImagePart {
+                    r#type: tp.to_owned(),
+                    image_data: image_data.to_owned(),
+                    is_base64: *is_base64,
+                    mime_type: mime_type.to_owned(),
+                },
+                Self::DocumentPart {
+                    document_data,
+                    mime_type,
+                    r#type: tp,
+                    is_base64,
+                } => Self::DocumentPart {
+                    r#type: tp.to_owned(),
+                    document_data: document_data.to_owned(),
+                    is_base64: *is_base64,
+                    mime_type: mime_type.to_owned(),
+                },
+                Self::ToolCallPart {
+                    id,
+                    name,
+                    arguments,
+                    r#type: tp,
+                } => Self::ToolCallPart {
+                    r#type: tp.to_owned(),
+                    id: id.clone(),
+                    name: name.to_owned(),
+                    arguments: arguments.to_owned(),
+                },
+                Self::ToolResultPart {
+                    tool_call_id,
+                    result,
+                    r#type: tp,
+                } => Self::ToolResultPart {
+                    r#type: tp.to_owned(),
+                    tool_call_id: tool_call_id.clone(),
+                    result: result.clone(),
+                },
+                Self::ThinkingPart {
+                    thinking,
+                    signature,
+                    r#type: tp,
+                } => Self::ThinkingPart {
+                    r#type: tp.to_owned(),
+                    thinking: thinking.clone(),
+                    signature: signature.clone(),
+                },
+            }
+        }
     }
 
     #[pymethods]
@@ -882,4 +972,624 @@ mod llms_sdk {
             signature,
         }
     }
+
+    impl From<MessagePart> for NativeMessagePart {
+        fn from(value: MessagePart) -> Self {
+            match value {
+                MessagePart::TextPart { text, r#type: _ } => {
+                    NativeMessagePart::Text(TextPart { text })
+                }
+                MessagePart::ImagePart {
+                    image_data,
+                    is_base64,
+                    mime_type,
+                    r#type: _,
+                } => NativeMessagePart::Image(ImagePart {
+                    data: image_data,
+                    is_base64,
+                    mime_type,
+                }),
+                MessagePart::AudioPart {
+                    audio_data,
+                    mime_type,
+                    r#type: _,
+                } => NativeMessagePart::Audio(AudioPart {
+                    data: audio_data,
+                    mime_type,
+                }),
+                MessagePart::DocumentPart {
+                    document_data,
+                    mime_type,
+                    is_base64,
+                    r#type: _,
+                } => NativeMessagePart::Document(DocumentPart {
+                    data: document_data,
+                    mime_type,
+                    is_base64,
+                }),
+                MessagePart::ToolCallPart {
+                    id,
+                    name,
+                    arguments,
+                    r#type: _,
+                } => NativeMessagePart::ToolCall(ToolCallPart {
+                    id,
+                    name,
+                    arguments,
+                }),
+                MessagePart::ToolResultPart {
+                    tool_call_id,
+                    result,
+                    r#type: _,
+                } => NativeMessagePart::ToolResult(ToolResultPart {
+                    tool_call_id,
+                    result,
+                }),
+                MessagePart::ThinkingPart {
+                    thinking,
+                    signature,
+                    r#type: _,
+                } => NativeMessagePart::Thinking(ThinkingPart {
+                    thinking,
+                    signature,
+                }),
+            }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen, eq, hash)]
+    #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+    pub enum MessageRole {
+        User,
+        Assistant,
+        System,
+        Tool,
+    }
+
+    #[pymethods]
+    impl MessageRole {
+        #[new]
+        fn new(role: String) -> PyResult<Self> {
+            match role.as_str() {
+                "user" => Ok(Self::User),
+                "assistant" => Ok(Self::Assistant),
+                "system" => Ok(Self::System),
+                "tool" => Ok(Self::Tool),
+                _ => Err(PyValueError::new_err(format!(
+                    "Unsupported role type: {}",
+                    role
+                ))),
+            }
+        }
+
+        fn __repr__(&self) -> String {
+            match self {
+                Self::User => "user".to_string(),
+                Self::Assistant => "assistant".to_string(),
+                Self::Tool => "tool".to_string(),
+                Self::System => "system".to_string(),
+            }
+        }
+
+        fn __str__(&self) -> String {
+            match self {
+                Self::User => "user".to_string(),
+                Self::Assistant => "assistant".to_string(),
+                Self::Tool => "tool".to_string(),
+                Self::System => "system".to_string(),
+            }
+        }
+    }
+
+    impl From<MessageRole> for NativeMessageRole {
+        fn from(value: MessageRole) -> Self {
+            match value {
+                MessageRole::User => Self::User,
+                MessageRole::Assistant => Self::Assistant,
+                MessageRole::System => Self::System,
+                MessageRole::Tool => Self::Tool,
+            }
+        }
+    }
+
+    #[pyclass(frozen)]
+    #[derive(Debug, FromPyObject)]
+    pub struct Message {
+        role: MessageRole,
+        content: Vec<MessagePart>,
+    }
+
+    #[pymethods]
+    impl Message {
+        #[new]
+        fn new(role: String, content: Vec<MessagePart>) -> PyResult<Self> {
+            let rl = MessageRole::new(role)?;
+            Ok(Self { role: rl, content })
+        }
+
+        #[getter]
+        fn role(&self) -> String {
+            self.role.__str__()
+        }
+
+        #[getter]
+        fn content(&self) -> Vec<MessagePart> {
+            self.content.iter().map(|c| c.as_clone()).collect()
+        }
+    }
+
+    impl From<Message> for NativeMessage {
+        fn from(value: Message) -> Self {
+            let role: NativeMessageRole = value.role.into();
+            let mut content: Vec<NativeMessagePart> = vec![];
+            for c in value.content {
+                content.push(c.into())
+            }
+            Self { role, content }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen)]
+    #[derive(Clone, Debug)]
+    pub struct Tool {
+        name: String,
+        description: String,
+        parameters: Schema,
+    }
+
+    #[pymethods]
+    impl Tool {
+        #[new]
+        fn new(
+            name: String,
+            description: String,
+            parameters_dict: Bound<'_, PyAny>,
+        ) -> PyResult<Self> {
+            let value: Value = depythonize(&parameters_dict).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "`parameters_dict` does not appear to be a JSON object: {}",
+                    e
+                ))
+            })?;
+            let schema: Schema = Schema::try_from(value).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "The provided schema does not seem to be a valid JSON schema: {}",
+                    e
+                ))
+            })?;
+            Ok(Self {
+                name,
+                description,
+                parameters: schema,
+            })
+        }
+
+        #[getter]
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+
+        #[getter]
+        fn description(&self) -> String {
+            self.description.clone()
+        }
+
+        #[getter]
+        fn parameters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+            let value: Value = self.parameters.clone().into();
+            Ok(pythonize(py, &value)?)
+        }
+    }
+
+    impl From<Tool> for NativeTool {
+        fn from(value: Tool) -> Self {
+            Self {
+                name: value.name,
+                description: value.description,
+                parameters: value.parameters,
+            }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen)]
+    #[derive(Debug, Clone)]
+    pub struct OutputFormat {
+        name: String,
+        description: String,
+        schema: Schema,
+    }
+
+    #[pymethods]
+    impl OutputFormat {
+        #[new]
+        fn new(name: String, description: String, schema_dict: Bound<'_, PyAny>) -> PyResult<Self> {
+            let value: Value = depythonize(&schema_dict).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "`schema_dict` does not appear to be a JSON object: {}",
+                    e
+                ))
+            })?;
+            let schema: Schema = Schema::try_from(value).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "The provided schema does not seem to be a valid JSON schema: {}",
+                    e
+                ))
+            })?;
+            Ok(Self {
+                name,
+                description,
+                schema,
+            })
+        }
+
+        #[getter]
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+
+        #[getter]
+        fn description(&self) -> String {
+            self.description.clone()
+        }
+
+        #[getter]
+        fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+            let value: Value = self.schema.clone().into();
+            Ok(pythonize(py, &value)?)
+        }
+    }
+
+    impl From<OutputFormat> for NativeOutputFormat {
+        fn from(value: OutputFormat) -> Self {
+            Self {
+                name: value.name,
+                description: value.description,
+                schema: value.schema,
+            }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen, eq, hash)]
+    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+    pub enum ApiType {
+        OpenAI,
+        Anthropic,
+    }
+
+    #[pymethods]
+    impl ApiType {
+        #[new]
+        fn new(api_type: String) -> PyResult<Self> {
+            match api_type.as_str() {
+                "openai" => Ok(Self::OpenAI),
+                "anthropic" => Ok(Self::Anthropic),
+                _ => Err(PyValueError::new_err(format!(
+                    "Unsupported API type: {}",
+                    api_type
+                ))),
+            }
+        }
+
+        fn __repr__(&self) -> String {
+            match self {
+                Self::OpenAI => "openai".to_string(),
+                Self::Anthropic => "anthropic".to_string(),
+            }
+        }
+
+        fn __str__(&self) -> String {
+            match self {
+                Self::OpenAI => "openai".to_string(),
+                Self::Anthropic => "anthropic".to_string(),
+            }
+        }
+    }
+
+    impl From<ApiType> for NativeApiType {
+        fn from(value: ApiType) -> Self {
+            match value {
+                ApiType::Anthropic => Self::Anthropic,
+                ApiType::OpenAI => Self::OpenAI,
+            }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen, eq, hash)]
+    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+    pub enum ReasoningEffort {
+        None,
+        Minimal,
+        Low,
+        Medium,
+        High,
+        Xhigh,
+        Maximum,
+    }
+
+    #[pymethods]
+    impl ReasoningEffort {
+        #[new]
+        fn new(effort: String) -> PyResult<Self> {
+            match effort.as_str() {
+                "none" => Ok(Self::None),
+                "minimal" => Ok(Self::Minimal),
+                "low" => Ok(Self::Low),
+                "medium" => Ok(Self::Medium),
+                "high" => Ok(Self::High),
+                "xhigh" => Ok(Self::Xhigh),
+                "max" | "maximum" => Ok(Self::Maximum),
+                _ => Err(PyValueError::new_err(format!(
+                    "Unsupported reasoning effort type: {}",
+                    effort
+                ))),
+            }
+        }
+
+        fn __repr__(&self) -> String {
+            match self {
+                Self::None => "none".to_string(),
+                Self::Minimal => "minimal".to_string(),
+                Self::Low => "low".to_string(),
+                Self::Medium => "medium".to_string(),
+                Self::High => "high".to_string(),
+                Self::Xhigh => "xhigh".to_string(),
+                Self::Maximum => "maximum".to_string(),
+            }
+        }
+
+        fn __str__(&self) -> String {
+            match self {
+                Self::None => "none".to_string(),
+                Self::Minimal => "minimal".to_string(),
+                Self::Low => "low".to_string(),
+                Self::Medium => "medium".to_string(),
+                Self::High => "high".to_string(),
+                Self::Xhigh => "xhigh".to_string(),
+                Self::Maximum => "maximum".to_string(),
+            }
+        }
+    }
+
+    impl From<ReasoningEffort> for NativeReasoningEffort {
+        fn from(value: ReasoningEffort) -> Self {
+            match value {
+                ReasoningEffort::High => Self::High,
+                ReasoningEffort::Low => Self::Low,
+                ReasoningEffort::Maximum => Self::Maximum,
+                ReasoningEffort::Medium => Self::Medium,
+                ReasoningEffort::Minimal => Self::Minimal,
+                ReasoningEffort::None => Self::None,
+                ReasoningEffort::Xhigh => Self::Xhigh,
+            }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen, eq, hash)]
+    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+    pub enum ToolChoice {
+        None,
+        Auto,
+        Required,
+    }
+
+    #[pymethods]
+    impl ToolChoice {
+        #[new]
+        fn new(tool_choice: String) -> PyResult<Self> {
+            match tool_choice.as_str() {
+                "none" => Ok(Self::None),
+                "auto" => Ok(Self::Auto),
+                "required" => Ok(Self::Required),
+                _ => Err(PyValueError::new_err(format!(
+                    "Unsupported tool choice type: {}",
+                    tool_choice
+                ))),
+            }
+        }
+
+        fn __repr__(&self) -> String {
+            match self {
+                Self::Auto => "auto".to_string(),
+                Self::None => "none".to_string(),
+                Self::Required => "required".to_string(),
+            }
+        }
+
+        fn __str__(&self) -> String {
+            match self {
+                Self::Auto => "auto".to_string(),
+                Self::None => "none".to_string(),
+                Self::Required => "required".to_string(),
+            }
+        }
+    }
+
+    impl From<ToolChoice> for NativeToolChoice {
+        fn from(value: ToolChoice) -> Self {
+            match value {
+                ToolChoice::Auto => Self::Auto,
+                ToolChoice::Required => Self::Required,
+                ToolChoice::None => Self::None,
+            }
+        }
+    }
+
+    #[pyclass]
+    #[derive(Debug, FromPyObject)]
+    pub struct LLMRequest {
+        /// Target API provider.
+        pub api_type: ApiType,
+        /// Custom base URL for the API. When `None`, the provider's default is used.
+        pub base_url: Option<String>,
+        /// API key used to authenticate the request.
+        pub api_key: String,
+        /// Model identifier to use for the request.
+        pub model: String,
+        /// Conversation history sent to the model.
+        pub messages: Vec<Message>,
+        /// Maximum number of tokens the model is allowed to generate.
+        pub max_output_tokens: Option<u32>,
+        /// Sampling temperature (0 = deterministic, higher = more random).
+        pub temperature: Option<f32>,
+        /// Nucleus sampling parameter (0–1).
+        pub top_p: Option<f32>,
+        /// Level of reasoning effort requested from the model.
+        pub reasoning_effort: Option<ReasoningEffort>,
+        /// Prompt cache time-to-live hint (provider-specific format).
+        pub prompt_cache_ttl: Option<String>,
+        /// Whether to request a streamed response.
+        pub stream: bool,
+        /// Optional JSON schema for structured outputs.
+        pub output_format: Option<OutputFormat>,
+        /// Tool definitions made available to the model.
+        pub tools: Option<Vec<Tool>>,
+        /// Controls whether the model may call tools.
+        pub tool_choice: Option<ToolChoice>,
+        /// Whether the model may call multiple tools in parallel.
+        pub parallel_tool_calls: bool,
+    }
+
+    #[pymethods]
+    impl LLMRequest {
+        #[new]
+        #[pyo3(signature = (
+            model,
+            api_key,
+            messages,
+            stream,
+            api_type = "openai".to_string(),
+            base_url = None,
+            max_output_tokens = None,
+            temperature = None,
+            top_p = None,
+            reasoning_effort = None,
+            prompt_cache_ttl = None,
+            output_format = None,
+            tool_choice = None,
+            tools = None,
+            parallel_tool_calls = false,
+        ))]
+        fn new(
+            model: String,
+            api_key: String,
+            messages: Vec<Message>,
+            stream: bool,
+            api_type: String,
+            base_url: Option<String>,
+            max_output_tokens: Option<u32>,
+            temperature: Option<f32>,
+            top_p: Option<f32>,
+            reasoning_effort: Option<String>,
+            prompt_cache_ttl: Option<String>,
+            output_format: Option<OutputFormat>,
+            tool_choice: Option<String>,
+            tools: Option<Vec<Tool>>,
+            parallel_tool_calls: bool,
+        ) -> PyResult<Self> {
+            let at = ApiType::new(api_type)?;
+            let re = match reasoning_effort {
+                Some(r) => Some(ReasoningEffort::new(r)?),
+                None => None,
+            };
+            let tc = match tool_choice {
+                Some(t) => Some(ToolChoice::new(t)?),
+                None => None,
+            };
+            Ok(Self {
+                api_key,
+                api_type: at,
+                base_url,
+                parallel_tool_calls,
+                prompt_cache_ttl,
+                max_output_tokens,
+                messages,
+                model,
+                tool_choice: tc,
+                reasoning_effort: re,
+                stream,
+                tools,
+                output_format,
+                temperature,
+                top_p,
+            })
+        }
+    }
+
+    impl From<LLMRequest> for NativeLLMRequest {
+        fn from(value: LLMRequest) -> Self {
+            let mut tools: Option<Vec<NativeTool>> = None;
+            if let Some(ts) = value.tools {
+                for t in ts {
+                    tools.get_or_insert_with(Vec::new).push(t.into());
+                }
+            }
+            let mut output_format: Option<NativeOutputFormat> = None;
+            if let Some(of) = value.output_format {
+                output_format = Some(of.into())
+            }
+            let mut messages: Vec<NativeMessage> = vec![];
+            for m in value.messages {
+                messages.push(m.into());
+            }
+            Self {
+                tools,
+                output_format,
+                messages,
+                max_output_tokens: value.max_output_tokens,
+                temperature: value.temperature.map(|t| t),
+                top_p: value.top_p.map(|t| t),
+                tool_choice: value.tool_choice.map(|tc| tc.into()),
+                parallel_tool_calls: value.parallel_tool_calls,
+                prompt_cache_ttl: value.prompt_cache_ttl,
+                api_key: value.api_key,
+                api_type: value.api_type.into(),
+                stream: value.stream,
+                reasoning_effort: value.reasoning_effort.map(|r| r.into()),
+                model: value.model,
+                base_url: value.base_url,
+            }
+        }
+    }
+
+    #[pyclass(from_py_object)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct RetryPolicy {
+        /// Maximum number of retries before giving up.
+        pub max_retries: u32,
+        /// Minimum wait time between retries, in milliseconds.
+        pub min_retry_interval: u32,
+        /// Maximum wait time between retries, in milliseconds.
+        pub max_retry_interval: u32,
+        /// Exponential backoff base.
+        pub base: u32,
+    }
+
+    impl Default for RetryPolicy {
+        fn default() -> Self {
+            Self {
+                max_retries: 3,
+                min_retry_interval: 500,
+                max_retry_interval: 3000,
+                base: 2,
+            }
+        }
+    }
+
+    impl From<RetryPolicy> for NativeRetryPolicy {
+        fn from(value: RetryPolicy) -> Self {
+            Self {
+                max_retries: value.max_retries,
+                max_retry_interval: Duration::from_millis(value.max_retry_interval as u64),
+                min_retry_interval: Duration::from_millis(value.min_retry_interval as u64),
+                base: value.base,
+                ..Default::default()
+            }
+        }
+    }
+
+    // #[pyclass]
+    // #[derive(Default)]
+    // pub struct LLM {
+    //     inner: NativeLLM,
+    // }
 }
