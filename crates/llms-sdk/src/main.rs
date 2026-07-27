@@ -169,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 llms_sdk::LLMStreamingResponse::Complete(c) => println!(
                     "\n\n\x1b[38;5;247mInput Tokens: {:?}; Output Tokens: {:?}; Tool Calls: {:?}",
-                    c.usage.map_or(0, |r| r.input_tokens),
+                    c.usage.clone().map_or(0, |r| r.input_tokens),
                     c.usage.map_or(0, |r| r.output_tokens),
                     c.tool_calls.map_or(0, |r| r.len())
                 ),

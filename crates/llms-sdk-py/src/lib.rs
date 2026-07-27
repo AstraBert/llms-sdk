@@ -1160,7 +1160,7 @@ mod llms_sdk {
     impl Message {
         fn as_clone(&self) -> Self {
             Self {
-                role: self.role.clone(),
+                role: self.role,
                 content: self.content.iter().map(|c| c.as_clone()).collect(),
             }
         }
@@ -1576,6 +1576,7 @@ mod llms_sdk {
             tools = None,
             parallel_tool_calls = false,
         ))]
+        #[allow(clippy::too_many_arguments)]
         fn new(
             model: String,
             api_key: String,
@@ -1676,8 +1677,8 @@ mod llms_sdk {
                 output_format,
                 messages,
                 max_output_tokens: value.max_output_tokens,
-                temperature: value.temperature.map(|t| t),
-                top_p: value.top_p.map(|t| t),
+                temperature: value.temperature,
+                top_p: value.top_p,
                 tool_choice: value.tool_choice.map(|tc| tc.into()),
                 parallel_tool_calls: value.parallel_tool_calls,
                 prompt_cache_ttl: value.prompt_cache_ttl,
@@ -1830,6 +1831,7 @@ mod llms_sdk {
 
     #[pyclass(from_py_object)]
     #[derive(Default, Clone)]
+    #[allow(clippy::upper_case_acronyms)]
     pub struct LLM {
         inner: NativeLLM,
     }
@@ -1849,7 +1851,7 @@ mod llms_sdk {
             py: Python<'py>,
             request: LLMRequest,
         ) -> PyResult<Bound<'py, PyAny>> {
-            let inner = self.inner.clone(); // requires NativeLLM: Clone, or Arc it
+            let inner = self.inner; // requires NativeLLM: Clone, or Arc it
             future_into_py(py, async move {
                 let response = inner.respond(request.into()).await.map_err(|e| {
                     PyRuntimeError::new_err(format!(
