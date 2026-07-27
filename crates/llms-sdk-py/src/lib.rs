@@ -3,6 +3,11 @@ use pyo3::prelude::*;
 /// A Python module implemented in Rust.
 #[pymodule]
 mod llms_sdk {
+    use llms_sdk::LLMStreamingComplete;
+    use llms_sdk::LLMStreamingDelta;
+    use llms_sdk::LLMStreamingResponse;
+    use llms_sdk::LLMThinkingDelta;
+    use llms_sdk::LLMToolDelta;
     use pyo3_async_runtimes::tokio::future_into_py;
     use std::collections::HashMap;
     use std::fs;
@@ -1766,6 +1771,348 @@ mod llms_sdk {
                 created_at: value.created_at,
                 message: value.message.into(),
                 usage: value.usage.into(),
+            }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen, eq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct StreamTextPart {
+        /// Identifier of the response this delta belongs to.
+        #[pyo3(get)]
+        response_id: String,
+        /// Unix timestamp of the response, when provided by the API.
+        #[pyo3(get)]
+        created_at: Option<u64>,
+        /// Chunk of generated text, if any.
+        #[pyo3(get)]
+        text_delta: Option<String>,
+        /// Whether this delta signals the end of the stream.
+        #[pyo3(get)]
+        stop: bool,
+    }
+
+    #[pymethods]
+    impl StreamTextPart {
+        #[new]
+        fn new(
+            response_id: String,
+            created_at: Option<u64>,
+            text_delta: Option<String>,
+            stop: bool,
+        ) -> Self {
+            Self {
+                response_id,
+                created_at,
+                text_delta,
+                stop,
+            }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen, eq)]
+    #[derive(Debug, Clone, Eq, PartialEq)]
+    pub struct StreamThinkingPart {
+        /// Identifier of the response this delta belongs to.
+        #[pyo3(get)]
+        response_id: String,
+        /// Unix timestamp of the response, when provided by the API.
+        #[pyo3(get)]
+        created_at: Option<u64>,
+        /// Chunk of reasoning text, if any.
+        #[pyo3(get)]
+        thinking_delta: Option<String>,
+    }
+
+    #[pymethods]
+    impl StreamThinkingPart {
+        #[new]
+        fn new(
+            response_id: String,
+            created_at: Option<u64>,
+            thinking_delta: Option<String>,
+        ) -> Self {
+            Self {
+                response_id,
+                created_at,
+                thinking_delta,
+            }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen, eq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct StreamToolCallPart {
+        /// Identifier for the completion response the tool call belongs to.
+        #[pyo3(get)]
+        response_id: String,
+        /// Identifier for the in-progress tool call.
+        #[pyo3(get)]
+        tool_call_id: String,
+        /// Name of the tool being called.
+        #[pyo3(get)]
+        name: String,
+        /// Partial JSON arguments accumulated so far.
+        #[pyo3(get)]
+        partial_arguments: String,
+    }
+
+    #[pymethods]
+    impl StreamToolCallPart {
+        #[new]
+        fn new(
+            response_id: String,
+            tool_call_id: String,
+            name: String,
+            partial_arguments: String,
+        ) -> Self {
+            Self {
+                response_id,
+                tool_call_id,
+                name,
+                partial_arguments,
+            }
+        }
+    }
+
+    #[pyclass(frozen)]
+    #[derive(Debug, FromPyObject)]
+    pub struct StreamEndPart {
+        /// Provider-generated response identifier.
+        #[pyo3(get)]
+        id: String,
+        /// Unix timestamp of the response, when provided by the API.
+        #[pyo3(get)]
+        created_at: Option<u64>,
+        /// All text deltas that make up the response.
+        #[pyo3(get)]
+        deltas: Vec<StreamTextPart>,
+        /// All reasoning deltas, if the model produced any.
+        #[pyo3(get)]
+        thinking_deltas: Option<Vec<StreamThinkingPart>>,
+        /// Token usage reported for the request, if provided.
+        #[pyo3(get)]
+        usage: Option<LLMUsage>,
+        /// Full message, with text, thinking and parsed tool calls
+        message: Message,
+    }
+
+    impl StreamEndPart {
+        fn as_clone(&self) -> Self {
+            Self {
+                id: self.id.clone(),
+                created_at: self.created_at,
+                deltas: self.deltas.clone(),
+                thinking_deltas: self.thinking_deltas.clone(),
+                usage: self.usage.clone(),
+                message: self.message.as_clone(),
+            }
+        }
+    }
+
+    #[pymethods]
+    impl StreamEndPart {
+        #[new]
+        fn new(
+            id: String,
+            created_at: Option<u64>,
+            deltas: Vec<StreamTextPart>,
+            thinking_deltas: Option<Vec<StreamThinkingPart>>,
+            usage: Option<LLMUsage>,
+            message: Message,
+        ) -> Self {
+            Self {
+                id,
+                created_at,
+                deltas,
+                thinking_deltas,
+                usage,
+                message,
+            }
+        }
+
+        #[getter]
+        fn message(&self) -> Message {
+            self.message.as_clone()
+        }
+    }
+
+    #[pyclass(from_py_object, frozen, eq, hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum StreamPartType {
+        Text,
+        Thinking,
+        ToolCall,
+        End,
+    }
+
+    #[pymethods]
+    impl StreamPartType {
+        #[new]
+        fn new(part_type: String) -> PyResult<Self> {
+            match part_type.as_str() {
+                "text" => Ok(Self::Text),
+                "thinking" => Ok(Self::Thinking),
+                "tool_call" => Ok(Self::ToolCall),
+                "end" => Ok(Self::End),
+                _ => Err(PyValueError::new_err(format!(
+                    "Unsupported streaming part type: {}",
+                    part_type
+                ))),
+            }
+        }
+
+        fn __str__(&self) -> String {
+            match self {
+                Self::Text => "text".to_string(),
+                Self::Thinking => "thinking".to_string(),
+                Self::ToolCall => "tool_call".to_string(),
+                Self::End => "end".to_string(),
+            }
+        }
+
+        fn __repr__(&self) -> String {
+            match self {
+                Self::Text => "text".to_string(),
+                Self::Thinking => "thinking".to_string(),
+                Self::ToolCall => "tool_call".to_string(),
+                Self::End => "end".to_string(),
+            }
+        }
+    }
+
+    #[pyclass(frozen)]
+    #[derive(Debug, FromPyObject)]
+    pub struct StreamPart {
+        #[pyo3(get, name = "type")]
+        r#type: StreamPartType,
+        #[pyo3(get)]
+        text: Option<StreamTextPart>,
+        #[pyo3(get)]
+        thinking: Option<StreamThinkingPart>,
+        #[pyo3(get)]
+        tool_call: Option<StreamToolCallPart>,
+        end: Option<StreamEndPart>,
+    }
+
+    #[pymethods]
+    impl StreamPart {
+        #[new]
+        fn new(
+            part_type: StreamPartType,
+            text: Option<StreamTextPart>,
+            tool_call: Option<StreamToolCallPart>,
+            thinking: Option<StreamThinkingPart>,
+            end: Option<StreamEndPart>,
+        ) -> Self {
+            Self {
+                r#type: part_type,
+                text,
+                tool_call,
+                thinking,
+                end,
+            }
+        }
+
+        #[getter]
+        fn end(&self) -> Option<StreamEndPart> {
+            self.end.as_ref().map(|m| m.as_clone())
+        }
+    }
+
+    impl From<LLMStreamingDelta> for StreamPart {
+        fn from(value: LLMStreamingDelta) -> Self {
+            Self {
+                r#type: StreamPartType::Text,
+                text: Some(StreamTextPart {
+                    text_delta: value.delta,
+                    response_id: value.response_id,
+                    created_at: value.created_at,
+                    stop: value.stop,
+                }),
+                end: None,
+                tool_call: None,
+                thinking: None,
+            }
+        }
+    }
+
+    impl From<LLMThinkingDelta> for StreamPart {
+        fn from(value: LLMThinkingDelta) -> Self {
+            Self {
+                r#type: StreamPartType::Thinking,
+                text: None,
+                tool_call: None,
+                end: None,
+                thinking: Some(StreamThinkingPart {
+                    response_id: value.response_id,
+                    created_at: value.created_at,
+                    thinking_delta: value.delta,
+                }),
+            }
+        }
+    }
+
+    impl From<LLMToolDelta> for StreamPart {
+        fn from(value: LLMToolDelta) -> Self {
+            Self {
+                r#type: StreamPartType::ToolCall,
+                thinking: None,
+                text: None,
+                end: None,
+                tool_call: Some(StreamToolCallPart {
+                    response_id: value.response_id,
+                    tool_call_id: value.tool_call_id,
+                    name: value.name,
+                    partial_arguments: value.partial_arguments,
+                }),
+            }
+        }
+    }
+
+    impl From<LLMStreamingComplete> for StreamPart {
+        fn from(value: LLMStreamingComplete) -> Self {
+            Self {
+                r#type: StreamPartType::End,
+                thinking: None,
+                text: None,
+                tool_call: None,
+                end: Some(StreamEndPart {
+                    id: value.id,
+                    created_at: value.created_at,
+                    deltas: value
+                        .deltas
+                        .iter()
+                        .map(|s| StreamTextPart {
+                            text_delta: s.delta.clone(),
+                            response_id: s.response_id.clone(),
+                            stop: s.stop,
+                            created_at: s.created_at,
+                        })
+                        .collect(),
+                    thinking_deltas: value.thinking_deltas.map(|v| {
+                        v.iter()
+                            .map(|t| StreamThinkingPart {
+                                thinking_delta: t.delta.clone(),
+                                response_id: t.response_id.clone(),
+                                created_at: t.created_at,
+                            })
+                            .collect()
+                    }),
+                    usage: value.usage.map(LLMUsage::from),
+                    message: value.message.into(),
+                }),
+            }
+        }
+    }
+
+    impl From<LLMStreamingResponse> for StreamPart {
+        fn from(value: LLMStreamingResponse) -> Self {
+            match value {
+                LLMStreamingResponse::Delta(d) => Self::from(d),
+                LLMStreamingResponse::ToolDelta(d) => Self::from(d),
+                LLMStreamingResponse::ThinkingDelta(d) => Self::from(d),
+                LLMStreamingResponse::Complete(c) => Self::from(c),
             }
         }
     }
