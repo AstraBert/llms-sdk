@@ -3,13 +3,18 @@ use pyo3::prelude::*;
 /// A Python module implemented in Rust.
 #[pymodule]
 mod llms_sdk {
+    use pyo3_async_runtimes::tokio::future_into_py;
+    use std::collections::HashMap;
     use std::fs;
 
     use base64::prelude::*;
     use either::Either;
     use llms_sdk::ApiType as NativeApiType;
-    // use llms_sdk::LLM as NativeLLM;
+    use llms_sdk::DEFAULT_OPENAI_BASE_URL;
+    use llms_sdk::LLM as NativeLLM;
     use llms_sdk::LLMRequest as NativeLLMRequest;
+    use llms_sdk::LLMResponse as NativeLLMResponse;
+    use llms_sdk::LLMUsage as NativeLLMUsage;
     use llms_sdk::Message as NativeMessage;
     use llms_sdk::MessagePart as NativeMessagePart;
     use llms_sdk::MessageRole as NativeMessageRole;
@@ -22,6 +27,9 @@ mod llms_sdk {
         ALLOWED_IMAGE_TYPES, AudioPart, DocumentPart, ImagePart, TextPart, ThinkingPart,
         ToolCallPart, ToolResultPart,
     };
+    use pyo3::exceptions::PyRuntimeError;
+    use pyo3::types::PyList;
+    use pyo3::types::PyType;
     use pyo3::{
         exceptions::{PyAttributeError, PyKeyError, PyValueError},
         prelude::*,
@@ -439,45 +447,45 @@ mod llms_sdk {
 
         #[getter]
         #[pyo3(name = "type")]
-        fn part_type(&self) -> String {
+        fn part_type(&self) -> PartType {
             match self {
                 Self::TextPart {
                     r#type: tp,
                     text: _,
-                } => tp.__str__(),
+                } => tp.to_owned(),
                 Self::ThinkingPart {
                     r#type: tp,
                     thinking: _,
                     signature: _,
-                } => tp.__str__(),
+                } => tp.to_owned(),
                 Self::ToolCallPart {
                     r#type: tp,
                     id: _,
                     name: _,
                     arguments: _,
-                } => tp.__str__(),
+                } => tp.to_owned(),
                 Self::ToolResultPart {
                     r#type: tp,
                     tool_call_id: _,
                     result: _,
-                } => tp.__str__(),
+                } => tp.to_owned(),
                 Self::ImagePart {
                     r#type: tp,
                     image_data: _,
                     is_base64: _,
                     mime_type: _,
-                } => tp.__str__(),
+                } => tp.to_owned(),
                 Self::DocumentPart {
                     r#type: tp,
                     document_data: _,
                     is_base64: _,
                     mime_type: _,
-                } => tp.__str__(),
+                } => tp.to_owned(),
                 Self::AudioPart {
                     r#type: tp,
                     audio_data: _,
                     mime_type: _,
-                } => tp.__str__(),
+                } => tp.to_owned(),
             }
         }
 
@@ -1037,6 +1045,45 @@ mod llms_sdk {
         }
     }
 
+    impl From<NativeMessagePart> for MessagePart {
+        fn from(value: NativeMessagePart) -> Self {
+            match value {
+                NativeMessagePart::Text(t) => MessagePart::TextPart {
+                    r#type: PartType::Text,
+                    text: t.text,
+                },
+                NativeMessagePart::Audio(a) => MessagePart::AudioPart {
+                    r#type: PartType::Audio,
+                    audio_data: a.data,
+                    mime_type: a.mime_type,
+                },
+                NativeMessagePart::Image(i) => MessagePart::ImagePart {
+                    r#type: PartType::Image,
+                    image_data: i.data,
+                    is_base64: i.is_base64,
+                    mime_type: i.mime_type,
+                },
+                NativeMessagePart::Thinking(t) => MessagePart::ThinkingPart {
+                    r#type: PartType::Thinking,
+                    thinking: t.thinking,
+                    signature: t.signature,
+                },
+                NativeMessagePart::ToolCall(tc) => MessagePart::ToolCallPart {
+                    r#type: PartType::ToolCall,
+                    id: tc.id,
+                    name: tc.name,
+                    arguments: tc.arguments,
+                },
+                NativeMessagePart::ToolResult(tr) => MessagePart::ToolResultPart {
+                    r#type: PartType::ToolResult,
+                    tool_call_id: tr.tool_call_id,
+                    result: tr.result,
+                },
+                _ => unreachable!("Unsupported part type"),
+            }
+        }
+    }
+
     #[pyclass(from_py_object, frozen, eq, hash)]
     #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
     pub enum MessageRole {
@@ -1092,11 +1139,44 @@ mod llms_sdk {
         }
     }
 
+    impl From<NativeMessageRole> for MessageRole {
+        fn from(value: NativeMessageRole) -> Self {
+            match value {
+                NativeMessageRole::User => Self::User,
+                NativeMessageRole::Assistant => Self::Assistant,
+                NativeMessageRole::System => Self::System,
+                NativeMessageRole::Tool => Self::Tool,
+            }
+        }
+    }
+
     #[pyclass(frozen)]
     #[derive(Debug, FromPyObject)]
     pub struct Message {
         role: MessageRole,
         content: Vec<MessagePart>,
+    }
+
+    impl Message {
+        fn as_clone(&self) -> Self {
+            Self {
+                role: self.role.clone(),
+                content: self.content.iter().map(|c| c.as_clone()).collect(),
+            }
+        }
+    }
+
+    impl From<NativeMessage> for Message {
+        fn from(value: NativeMessage) -> Self {
+            let mut content: Vec<MessagePart> = vec![];
+            for c in value.content {
+                content.push(c.into())
+            }
+            Self {
+                role: value.role.into(),
+                content,
+            }
+        }
     }
 
     #[pymethods]
@@ -1108,13 +1188,26 @@ mod llms_sdk {
         }
 
         #[getter]
-        fn role(&self) -> String {
-            self.role.__str__()
+        fn role(&self) -> MessageRole {
+            self.role
         }
 
         #[getter]
         fn content(&self) -> Vec<MessagePart> {
             self.content.iter().map(|c| c.as_clone()).collect()
+        }
+
+        fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+            let content_ls = PyList::empty(py);
+            for c in self.content() {
+                let pyc = c.to_dict(py)?;
+                content_ls.append(pyc)?;
+            }
+            d.set_item("role", self.role.__str__())?;
+            d.set_item("content", content_ls)?;
+
+            Ok(d)
         }
     }
 
@@ -1418,34 +1511,48 @@ mod llms_sdk {
     #[derive(Debug, FromPyObject)]
     pub struct LLMRequest {
         /// Target API provider.
+        #[pyo3(get)]
         pub api_type: ApiType,
         /// Custom base URL for the API. When `None`, the provider's default is used.
+        #[pyo3(get)]
         pub base_url: Option<String>,
         /// API key used to authenticate the request.
+        #[pyo3(get)]
         pub api_key: String,
         /// Model identifier to use for the request.
+        #[pyo3(get)]
         pub model: String,
         /// Conversation history sent to the model.
         pub messages: Vec<Message>,
         /// Maximum number of tokens the model is allowed to generate.
+        #[pyo3(get)]
         pub max_output_tokens: Option<u32>,
         /// Sampling temperature (0 = deterministic, higher = more random).
+        #[pyo3(get)]
         pub temperature: Option<f32>,
         /// Nucleus sampling parameter (0–1).
+        #[pyo3(get)]
         pub top_p: Option<f32>,
         /// Level of reasoning effort requested from the model.
+        #[pyo3(get)]
         pub reasoning_effort: Option<ReasoningEffort>,
         /// Prompt cache time-to-live hint (provider-specific format).
+        #[pyo3(get)]
         pub prompt_cache_ttl: Option<String>,
         /// Whether to request a streamed response.
+        #[pyo3(get)]
         pub stream: bool,
         /// Optional JSON schema for structured outputs.
+        #[pyo3(get)]
         pub output_format: Option<OutputFormat>,
         /// Tool definitions made available to the model.
+        #[pyo3(get)]
         pub tools: Option<Vec<Tool>>,
         /// Controls whether the model may call tools.
+        #[pyo3(get)]
         pub tool_choice: Option<ToolChoice>,
         /// Whether the model may call multiple tools in parallel.
+        #[pyo3(get)]
         pub parallel_tool_calls: bool,
     }
 
@@ -1513,6 +1620,39 @@ mod llms_sdk {
                 top_p,
             })
         }
+
+        #[classmethod]
+        #[pyo3(signature = (api_key, messages, model, stream = false))]
+        fn from_defaults(
+            _cls: &Bound<'_, PyType>,
+            api_key: String,
+            messages: Vec<Message>,
+            model: String,
+            stream: bool,
+        ) -> Self {
+            Self {
+                messages,
+                model,
+                stream,
+                api_key,
+                api_type: ApiType::OpenAI,
+                temperature: None,
+                top_p: None,
+                max_output_tokens: None,
+                output_format: None,
+                prompt_cache_ttl: None,
+                base_url: Some(DEFAULT_OPENAI_BASE_URL.to_string()),
+                reasoning_effort: None,
+                tools: None,
+                tool_choice: None,
+                parallel_tool_calls: false,
+            }
+        }
+
+        #[getter]
+        fn messages(&self) -> Vec<Message> {
+            self.messages.iter().map(|m| m.as_clone()).collect()
+        }
     }
 
     impl From<LLMRequest> for NativeLLMRequest {
@@ -1551,16 +1691,98 @@ mod llms_sdk {
         }
     }
 
-    #[pyclass(from_py_object)]
-    #[derive(Debug, Clone, Copy)]
+    #[pyclass(from_py_object, frozen, eq)]
+    #[derive(Debug, Clone, Eq, PartialEq)]
+    pub struct LLMUsage {
+        /// Tokens consumed by the prompt.
+        #[pyo3(get)]
+        pub input_tokens: u32,
+        /// Tokens generated in the response.
+        #[pyo3(get)]
+        pub output_tokens: u32,
+        /// Tokens read from a provider cache, when applicable.
+        #[pyo3(get)]
+        pub cache_read_tokens: Option<u32>,
+        /// Tokens written to a provider cache, when applicable.
+        #[pyo3(get)]
+        pub cache_write_tokens: Option<u32>,
+        /// Any additional tokens counted by the provider.
+        #[pyo3(get)]
+        pub other_tokens: Option<HashMap<String, u32>>,
+    }
+
+    impl From<NativeLLMUsage> for LLMUsage {
+        fn from(value: NativeLLMUsage) -> Self {
+            Self {
+                input_tokens: value.input_tokens,
+                output_tokens: value.output_tokens,
+                cache_read_tokens: value.cache_read_tokens,
+                cache_write_tokens: value.cache_write_tokens,
+                other_tokens: value.other_tokens,
+            }
+        }
+    }
+
+    #[pyclass(frozen)]
+    #[derive(Debug, FromPyObject)]
+    pub struct LLMResponse {
+        /// Provider-generated response identifier.
+        #[pyo3(get)]
+        pub id: String,
+        /// Unix timestamp of the response, when provided by the API.
+        #[pyo3(get)]
+        pub created_at: Option<u64>,
+        /// The generated message.
+        pub message: Message,
+        /// Token usage reported for the request.
+        #[pyo3(get)]
+        pub usage: LLMUsage,
+    }
+
+    #[pymethods]
+    impl LLMResponse {
+        #[new]
+        #[pyo3(signature = (id, message, usage, created_at = None))]
+        fn new(id: String, message: Message, usage: LLMUsage, created_at: Option<u64>) -> Self {
+            Self {
+                id,
+                message,
+                usage,
+                created_at,
+            }
+        }
+
+        #[getter]
+        fn message(&self) -> Message {
+            self.message.as_clone()
+        }
+    }
+
+    impl From<NativeLLMResponse> for LLMResponse {
+        fn from(value: NativeLLMResponse) -> Self {
+            Self {
+                id: value.id,
+                created_at: value.created_at,
+                message: value.message.into(),
+                usage: value.usage.into(),
+            }
+        }
+    }
+
+    #[pyclass(from_py_object, frozen, eq)]
+    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
     pub struct RetryPolicy {
         /// Maximum number of retries before giving up.
+        #[pyo3(get)]
         pub max_retries: u32,
         /// Minimum wait time between retries, in milliseconds.
-        pub min_retry_interval: u32,
+        #[pyo3(get)]
+        pub min_retry_interval: u64,
         /// Maximum wait time between retries, in milliseconds.
-        pub max_retry_interval: u32,
+        #[pyo3(get)]
+        pub max_retry_interval: u64,
         /// Exponential backoff base.
+        #[pyo3(get)]
         pub base: u32,
     }
 
@@ -1575,21 +1797,68 @@ mod llms_sdk {
         }
     }
 
+    #[pymethods]
+    impl RetryPolicy {
+        #[new]
+        #[pyo3(signature = (max_retries = 3, min_retry_interval = 500, max_retry_interval = 3000, base = 2))]
+        fn new(
+            max_retries: u32,
+            min_retry_interval: u64,
+            max_retry_interval: u64,
+            base: u32,
+        ) -> Self {
+            Self {
+                max_retries,
+                min_retry_interval,
+                max_retry_interval,
+                base,
+            }
+        }
+    }
+
     impl From<RetryPolicy> for NativeRetryPolicy {
         fn from(value: RetryPolicy) -> Self {
             Self {
                 max_retries: value.max_retries,
-                max_retry_interval: Duration::from_millis(value.max_retry_interval as u64),
-                min_retry_interval: Duration::from_millis(value.min_retry_interval as u64),
+                max_retry_interval: Duration::from_millis(value.max_retry_interval),
+                min_retry_interval: Duration::from_millis(value.min_retry_interval),
                 base: value.base,
                 ..Default::default()
             }
         }
     }
 
-    // #[pyclass]
-    // #[derive(Default)]
-    // pub struct LLM {
-    //     inner: NativeLLM,
-    // }
+    #[pyclass(from_py_object)]
+    #[derive(Default, Clone)]
+    pub struct LLM {
+        inner: NativeLLM,
+    }
+
+    #[pymethods]
+    impl LLM {
+        #[new]
+        #[pyo3(signature = (retry_policy = None))]
+        fn new(retry_policy: Option<RetryPolicy>) -> Self {
+            Self {
+                inner: NativeLLM::new(retry_policy.unwrap_or_default().into()),
+            }
+        }
+
+        fn respond<'py>(
+            &self,
+            py: Python<'py>,
+            request: LLMRequest,
+        ) -> PyResult<Bound<'py, PyAny>> {
+            let inner = self.inner.clone(); // requires NativeLLM: Clone, or Arc it
+            future_into_py(py, async move {
+                let response = inner.respond(request.into()).await.map_err(|e| {
+                    PyRuntimeError::new_err(format!(
+                        "Could not produce the response from the LLM: {}",
+                        e
+                    ))
+                })?;
+                Ok(LLMResponse::from(response))
+            })
+        }
+    }
 }

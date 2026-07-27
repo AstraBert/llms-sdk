@@ -2,6 +2,7 @@ use base64::prelude::*;
 use futures_core::Stream;
 use reqwest_retry::Jitter;
 use schemars::{JsonSchema, Schema, schema_for, schema_for_value};
+use std::collections::HashMap;
 #[cfg(feature = "fs")]
 use std::fs;
 #[cfg(feature = "fs")]
@@ -814,13 +815,13 @@ impl RetryPolicy {
 }
 
 /// Token usage reported by the LLM API.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LLMUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub cache_read_tokens: Option<u32>,
     pub cache_write_tokens: Option<u32>,
-    pub other_tokens: Option<u32>,
+    pub other_tokens: Option<HashMap<String, u32>>,
 }
 
 /// A complete, non-streaming response from the LLM.

@@ -24,6 +24,7 @@ use napi::bindgen_prelude::Either4;
 use napi::bindgen_prelude::Either7;
 use napi::bindgen_prelude::{Buffer, Either};
 use schemars::Schema;
+use std::collections::HashMap;
 use std::fs;
 use url::Url;
 
@@ -680,7 +681,7 @@ impl TryFrom<LLMRequest> for NativeLLMRequest {
 
 /// Token usage reported by the LLM API.
 #[napi(object)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LLMUsage {
   /// Tokens consumed by the prompt.
   pub input_tokens: u32,
@@ -691,7 +692,7 @@ pub struct LLMUsage {
   /// Tokens written to a provider cache, when applicable.
   pub cache_write_tokens: Option<u32>,
   /// Any additional tokens counted by the provider.
-  pub other_tokens: Option<u32>,
+  pub other_tokens: Option<HashMap<String, u32>>,
 }
 
 /// A complete, non-streaming response from the LLM.

@@ -23,7 +23,7 @@ pub fn install_crypto_provider() {
 use crate::{anthropic::AntClient, openai::OpenAIClient};
 
 /// Unified entry point for sending requests to OpenAI or Anthropic-compatible APIs.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct LLM {
     /// Retry policy applied to all API requests made through this client.
     pub retry_policy: RetryPolicy,
