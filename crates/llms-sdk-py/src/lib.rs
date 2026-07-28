@@ -1,16 +1,39 @@
 use pyo3::prelude::*;
+use pyo3_stub_gen::define_stub_info_gatherer;
 
-/// A Python module implemented in Rust.
+/// Python bindings for the ``llms_sdk`` Rust crate.
+///
+/// This module exposes a unified interface for interacting with LLM providers
+/// (OpenAI, Anthropic, etc.) from Python.  All types are implemented in Rust
+/// and exposed via ``pyo3``.
+///
+/// Quick start::
+///
+///     import llms_sdk_py as llm
+///
+///     req = llm.LLMRequest(
+///         model="gpt-4o",
+///         api_key="sk-...",
+///         messages=[llm.Message("user", [llm.TextPart("Hello!")])],
+///         stream=False,
+///     )
+///     client = llm.LLM()
+///     response = await client.respond(req)
 #[pymodule]
-mod llms_sdk {
+mod llms_sdk_py {
+    use futures::stream::{BoxStream, StreamExt, TryStreamExt};
     use llms_sdk::LLMStreamingComplete;
     use llms_sdk::LLMStreamingDelta;
     use llms_sdk::LLMStreamingResponse;
     use llms_sdk::LLMThinkingDelta;
     use llms_sdk::LLMToolDelta;
+    use pyo3::exceptions::PyStopAsyncIteration;
     use pyo3_async_runtimes::tokio::future_into_py;
+    use pyo3_stub_gen::derive::*;
     use std::collections::HashMap;
     use std::fs;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     use base64::prelude::*;
     use either::Either;
@@ -47,6 +70,10 @@ mod llms_sdk {
     use std::time::Duration;
     use url::Url;
 
+    /// Discriminator for the different kinds of message parts.
+    ///
+    /// Use this enum to inspect the ``type`` attribute on a :py:class:`MessagePart`.
+    #[gen_stub_pyclass_enum]
     #[pyclass(eq, hash, frozen, from_py_object)]
     #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
     pub enum PartType {
@@ -103,51 +130,65 @@ mod llms_sdk {
         }
     }
 
+    /// A single piece of content inside a :py:class:`Message`.
+    ///
+    /// This is a tagged-union (variant enum).  The ``type`` attribute tells you
+    /// which variant is active and therefore which other fields are available::
+    ///
+    ///     part = TextPart("hello")
+    ///     assert part.type == PartType.Text
+    ///     assert part.text == "hello"
+    ///
+    /// Convenience constructors are provided at module level:
+    /// :py:func:`TextPart`, :py:func:`ImagePart`, :py:func:`AudioPart`,
+    /// :py:func:`DocumentPart`, :py:func:`ToolCallPart`,
+    /// :py:func:`ToolResultPart`, :py:func:`ThinkingPart`.
+    #[gen_stub_pyclass_complex_enum]
     #[pyclass(frozen)]
     #[derive(Debug, FromPyObject)]
     #[allow(clippy::enum_variant_names)]
     pub enum MessagePart {
         TextPart {
             #[pyo3(attribute("type"), default = PartType::Text)]
-            r#type: PartType,
+            part_type: PartType,
             text: String,
         },
         ImagePart {
             #[pyo3(attribute("type"), default = PartType::Image)]
-            r#type: PartType,
+            part_type: PartType,
             image_data: String,
             is_base64: bool,
             mime_type: Option<String>,
         },
         AudioPart {
             #[pyo3(attribute("type"), default = PartType::Audio)]
-            r#type: PartType,
+            part_type: PartType,
             audio_data: String,
             mime_type: String,
         },
         DocumentPart {
             #[pyo3(attribute("type"), default = PartType::Document)]
-            r#type: PartType,
+            part_type: PartType,
             document_data: String,
             is_base64: bool,
             mime_type: Option<String>,
         },
         ThinkingPart {
             #[pyo3(attribute("type"), default = PartType::Thinking)]
-            r#type: PartType,
+            part_type: PartType,
             thinking: String,
             signature: Option<String>,
         },
         ToolCallPart {
             #[pyo3(attribute("type"), default = PartType::ToolCall)]
-            r#type: PartType,
+            part_type: PartType,
             id: String,
             name: String,
             arguments: String,
         },
         ToolResultPart {
             #[pyo3(attribute("type"), default = PartType::ToolResult)]
-            r#type: PartType,
+            part_type: PartType,
             tool_call_id: String,
             result: String,
         },
@@ -156,26 +197,29 @@ mod llms_sdk {
     impl MessagePart {
         fn as_clone(&self) -> Self {
             match self {
-                Self::TextPart { text, r#type: tp } => Self::TextPart {
-                    r#type: tp.to_owned(),
+                Self::TextPart {
+                    text,
+                    part_type: tp,
+                } => Self::TextPart {
+                    part_type: tp.to_owned(),
                     text: text.clone(),
                 },
                 Self::AudioPart {
                     audio_data,
                     mime_type,
-                    r#type: tp,
+                    part_type: tp,
                 } => Self::AudioPart {
-                    r#type: tp.to_owned(),
+                    part_type: tp.to_owned(),
                     audio_data: audio_data.clone(),
                     mime_type: mime_type.clone(),
                 },
                 Self::ImagePart {
                     image_data,
                     mime_type,
-                    r#type: tp,
+                    part_type: tp,
                     is_base64,
                 } => Self::ImagePart {
-                    r#type: tp.to_owned(),
+                    part_type: tp.to_owned(),
                     image_data: image_data.to_owned(),
                     is_base64: *is_base64,
                     mime_type: mime_type.to_owned(),
@@ -183,10 +227,10 @@ mod llms_sdk {
                 Self::DocumentPart {
                     document_data,
                     mime_type,
-                    r#type: tp,
+                    part_type: tp,
                     is_base64,
                 } => Self::DocumentPart {
-                    r#type: tp.to_owned(),
+                    part_type: tp.to_owned(),
                     document_data: document_data.to_owned(),
                     is_base64: *is_base64,
                     mime_type: mime_type.to_owned(),
@@ -195,9 +239,9 @@ mod llms_sdk {
                     id,
                     name,
                     arguments,
-                    r#type: tp,
+                    part_type: tp,
                 } => Self::ToolCallPart {
-                    r#type: tp.to_owned(),
+                    part_type: tp.to_owned(),
                     id: id.clone(),
                     name: name.to_owned(),
                     arguments: arguments.to_owned(),
@@ -205,18 +249,18 @@ mod llms_sdk {
                 Self::ToolResultPart {
                     tool_call_id,
                     result,
-                    r#type: tp,
+                    part_type: tp,
                 } => Self::ToolResultPart {
-                    r#type: tp.to_owned(),
+                    part_type: tp.to_owned(),
                     tool_call_id: tool_call_id.clone(),
                     result: result.clone(),
                 },
                 Self::ThinkingPart {
                     thinking,
                     signature,
-                    r#type: tp,
+                    part_type: tp,
                 } => Self::ThinkingPart {
-                    r#type: tp.to_owned(),
+                    part_type: tp.to_owned(),
                     thinking: thinking.clone(),
                     signature: signature.clone(),
                 },
@@ -224,8 +268,19 @@ mod llms_sdk {
         }
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl MessagePart {
+        /// Create a :py:class:`MessagePart` from a type string and keyword args.
+        ///
+        /// Args:
+        ///     part_type: One of ``"text"``, ``"image"``, ``"audio"``,
+        ///         ``"document"``, ``"thinking"``, ``"tool_call"``,
+        ///         ``"tool_result"``.
+        ///     **kwargs: Variant-specific fields (see the class docs).
+        ///
+        /// Returns:
+        ///     A new :py:class:`MessagePart` instance.
         #[new]
         #[pyo3(signature = (part_type, **kwargs))]
         fn new(part_type: String, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
@@ -236,7 +291,7 @@ mod llms_sdk {
                         let text_res = args.get_item("text")?;
                         match text_res {
                             Some(t) => Ok(Self::TextPart {
-                                r#type: tp,
+                                part_type: tp,
                                 text: t.to_string(),
                             }),
                             None => Err(PyKeyError::new_err(
@@ -264,7 +319,7 @@ mod llms_sdk {
                             }
                         };
                         Ok(MessagePart::AudioPart {
-                            r#type: tp,
+                            part_type: tp,
                             audio_data: audio_data.to_string(),
                             mime_type: mime_type.to_string(),
                         })
@@ -304,7 +359,7 @@ mod llms_sdk {
                             }
                         };
                         Ok(MessagePart::ImagePart {
-                            r#type: tp,
+                            part_type: tp,
                             image_data,
                             is_base64,
                             mime_type,
@@ -345,7 +400,7 @@ mod llms_sdk {
                             }
                         };
                         Ok(MessagePart::DocumentPart {
-                            r#type: tp,
+                            part_type: tp,
                             document_data,
                             is_base64,
                             mime_type,
@@ -380,7 +435,7 @@ mod llms_sdk {
                             }
                         };
                         Ok(MessagePart::ToolCallPart {
-                            r#type: tp,
+                            part_type: tp,
                             id: tc_id.to_string(),
                             name: name.to_string(),
                             arguments: tc_args.to_string(),
@@ -406,7 +461,7 @@ mod llms_sdk {
                             }
                         };
                         Ok(MessagePart::ToolResultPart {
-                            r#type: tp,
+                            part_type: tp,
                             tool_call_id: tc_id.to_string(),
                             result: res.to_string(),
                         })
@@ -437,7 +492,7 @@ mod llms_sdk {
                             }
                         };
                         Ok(MessagePart::ThinkingPart {
-                            r#type: tp,
+                            part_type: tp,
                             thinking: thinking.to_string(),
                             signature,
                         })
@@ -450,61 +505,66 @@ mod llms_sdk {
             }
         }
 
+        /// The discriminator telling you which variant this part is.
         #[getter]
         #[pyo3(name = "type")]
         fn part_type(&self) -> PartType {
             match self {
                 Self::TextPart {
-                    r#type: tp,
+                    part_type: tp,
                     text: _,
                 } => tp.to_owned(),
                 Self::ThinkingPart {
-                    r#type: tp,
+                    part_type: tp,
                     thinking: _,
                     signature: _,
                 } => tp.to_owned(),
                 Self::ToolCallPart {
-                    r#type: tp,
+                    part_type: tp,
                     id: _,
                     name: _,
                     arguments: _,
                 } => tp.to_owned(),
                 Self::ToolResultPart {
-                    r#type: tp,
+                    part_type: tp,
                     tool_call_id: _,
                     result: _,
                 } => tp.to_owned(),
                 Self::ImagePart {
-                    r#type: tp,
+                    part_type: tp,
                     image_data: _,
                     is_base64: _,
                     mime_type: _,
                 } => tp.to_owned(),
                 Self::DocumentPart {
-                    r#type: tp,
+                    part_type: tp,
                     document_data: _,
                     is_base64: _,
                     mime_type: _,
                 } => tp.to_owned(),
                 Self::AudioPart {
-                    r#type: tp,
+                    part_type: tp,
                     audio_data: _,
                     mime_type: _,
                 } => tp.to_owned(),
             }
         }
 
+        /// Convert the part to a plain Python ``dict``.
         fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
             let d = PyDict::new(py);
             match self {
-                Self::TextPart { text, r#type: tp } => {
+                Self::TextPart {
+                    text,
+                    part_type: tp,
+                } => {
                     d.set_item("type", tp.__str__())?;
                     d.set_item("text", text)?;
                 }
                 Self::ThinkingPart {
                     thinking,
                     signature,
-                    r#type: tp,
+                    part_type: tp,
                 } => {
                     d.set_item("type", tp.__str__())?;
                     d.set_item("thinking", thinking)?;
@@ -514,7 +574,7 @@ mod llms_sdk {
                     id,
                     name,
                     arguments,
-                    r#type: tp,
+                    part_type: tp,
                 } => {
                     d.set_item("type", tp.__str__())?;
                     d.set_item("id", id)?;
@@ -524,7 +584,7 @@ mod llms_sdk {
                 Self::ToolResultPart {
                     tool_call_id,
                     result,
-                    r#type: tp,
+                    part_type: tp,
                 } => {
                     d.set_item("type", tp.__str__())?;
                     d.set_item("tool_call_id", tool_call_id)?;
@@ -534,7 +594,7 @@ mod llms_sdk {
                     image_data,
                     is_base64,
                     mime_type,
-                    r#type: tp,
+                    part_type: tp,
                 } => {
                     d.set_item("type", tp.__str__())?;
                     d.set_item("image_data", image_data)?;
@@ -545,7 +605,7 @@ mod llms_sdk {
                     document_data,
                     is_base64,
                     mime_type,
-                    r#type: tp,
+                    part_type: tp,
                 } => {
                     d.set_item("type", tp.__str__())?;
                     d.set_item("document_data", document_data)?;
@@ -555,7 +615,7 @@ mod llms_sdk {
                 Self::AudioPart {
                     audio_data,
                     mime_type,
-                    r#type: tp,
+                    part_type: tp,
                 } => {
                     d.set_item("type", tp.__str__())?;
                     d.set_item("audio_data", audio_data)?;
@@ -566,21 +626,23 @@ mod llms_sdk {
             Ok(d)
         }
 
+        /// Text payload (only available on ``TextPart``).
         #[getter]
         fn text(&self) -> PyResult<String> {
             match self {
-                Self::TextPart { r#type: _, text } => Ok(text.to_owned()),
+                Self::TextPart { part_type: _, text } => Ok(text.to_owned()),
                 _ => Err(PyAttributeError::new_err(
                     "No attribute 'text' defined for this instance of MessagePart",
                 )),
             }
         }
 
+        /// Reasoning text (only available on ``ThinkingPart``).
         #[getter]
         fn thinking(&self) -> PyResult<String> {
             match self {
                 Self::ThinkingPart {
-                    r#type: _,
+                    part_type: _,
                     thinking,
                     signature: _,
                 } => Ok(thinking.to_owned()),
@@ -590,11 +652,12 @@ mod llms_sdk {
             }
         }
 
+        /// Signature block for reasoning (only available on ``ThinkingPart``).
         #[getter]
         fn signature(&self) -> PyResult<Option<String>> {
             match self {
                 Self::ThinkingPart {
-                    r#type: _,
+                    part_type: _,
                     thinking: _,
                     signature,
                 } => Ok(signature.to_owned()),
@@ -604,17 +667,18 @@ mod llms_sdk {
             }
         }
 
+        /// Whether the payload is base64-encoded (``ImagePart`` / ``DocumentPart``).
         #[getter]
         fn is_base64(&self) -> PyResult<bool> {
             match self {
                 Self::ImagePart {
-                    r#type: _,
+                    part_type: _,
                     is_base64,
                     image_data: _,
                     mime_type: _,
                 } => Ok(*is_base64),
                 Self::DocumentPart {
-                    r#type: _,
+                    part_type: _,
                     is_base64,
                     document_data: _,
                     mime_type: _,
@@ -625,11 +689,12 @@ mod llms_sdk {
             }
         }
 
+        /// Raw document payload or URL (only available on ``DocumentPart``).
         #[getter]
         fn document_data(&self) -> PyResult<String> {
             match self {
                 Self::DocumentPart {
-                    r#type: _,
+                    part_type: _,
                     is_base64: _,
                     document_data,
                     mime_type: _,
@@ -640,11 +705,12 @@ mod llms_sdk {
             }
         }
 
+        /// Raw image payload or URL (only available on ``ImagePart``).
         #[getter]
         fn image_data(&self) -> PyResult<String> {
             match self {
                 Self::ImagePart {
-                    r#type: _,
+                    part_type: _,
                     is_base64: _,
                     image_data,
                     mime_type: _,
@@ -655,11 +721,12 @@ mod llms_sdk {
             }
         }
 
+        /// Raw audio payload (only available on ``AudioPart``).
         #[getter]
         fn audio_data(&self) -> PyResult<String> {
             match self {
                 Self::AudioPart {
-                    r#type: _,
+                    part_type: _,
                     audio_data,
                     mime_type: _,
                 } => Ok(audio_data.to_owned()),
@@ -669,22 +736,25 @@ mod llms_sdk {
             }
         }
 
+        /// MIME type of the payload, when known.
+        ///
+        /// Available on ``ImagePart``, ``AudioPart`` and ``DocumentPart``.
         #[getter]
         fn mime_type(&self) -> PyResult<Option<String>> {
             match self {
                 Self::AudioPart {
-                    r#type: _,
+                    part_type: _,
                     audio_data: _,
                     mime_type,
                 } => Ok(Some(mime_type.to_owned())),
                 Self::ImagePart {
-                    r#type: _,
+                    part_type: _,
                     image_data: _,
                     is_base64: _,
                     mime_type,
                 } => Ok(mime_type.to_owned()),
                 Self::DocumentPart {
-                    r#type: _,
+                    part_type: _,
                     document_data: _,
                     is_base64: _,
                     mime_type,
@@ -695,17 +765,18 @@ mod llms_sdk {
             }
         }
 
+        /// Tool-call identifier (``ToolCallPart`` / ``ToolResultPart``).
         #[getter]
         fn tool_call_id(&self) -> PyResult<String> {
             match self {
                 Self::ToolCallPart {
-                    r#type: _,
+                    part_type: _,
                     id,
                     name: _,
                     arguments: _,
                 } => Ok(id.to_owned()),
                 Self::ToolResultPart {
-                    r#type: _,
+                    part_type: _,
                     tool_call_id,
                     result: _,
                 } => Ok(tool_call_id.to_owned()),
@@ -715,11 +786,12 @@ mod llms_sdk {
             }
         }
 
+        /// Name of the tool being called (only ``ToolCallPart``).
         #[getter]
         fn tool_call_name(&self) -> PyResult<String> {
             match self {
                 Self::ToolCallPart {
-                    r#type: _,
+                    part_type: _,
                     id: _,
                     name,
                     arguments: _,
@@ -730,11 +802,12 @@ mod llms_sdk {
             }
         }
 
+        /// JSON-encoded arguments for the tool call (only ``ToolCallPart``).
         #[getter]
         fn tool_call_arguments(&self) -> PyResult<String> {
             match self {
                 Self::ToolCallPart {
-                    r#type: _,
+                    part_type: _,
                     id: _,
                     name: _,
                     arguments,
@@ -745,11 +818,12 @@ mod llms_sdk {
             }
         }
 
+        /// Result returned by a tool execution (only ``ToolResultPart``).
         #[getter]
         fn tool_call_result(&self) -> PyResult<String> {
             match self {
                 Self::ToolResultPart {
-                    r#type: _,
+                    part_type: _,
                     tool_call_id: _,
                     result,
                 } => Ok(result.to_owned()),
@@ -760,6 +834,17 @@ mod llms_sdk {
         }
     }
 
+    /// Convenience constructor for an image part.
+    ///
+    /// Args:
+    ///     input: Either a file path / URL string, or raw ``bytes``.
+    ///
+    /// Returns:
+    ///     A :py:class:`MessagePart` configured as ``ImagePart``.
+    ///
+    /// Raises:
+    ///     ValueError: If the image format is not supported.
+    #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(signature = (input, /), name = "ImagePart")]
     pub fn image_part(input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
@@ -768,7 +853,7 @@ mod llms_sdk {
                 Ok(u) => {
                     if matches!(u.scheme(), "http" | "https") {
                         Ok(MessagePart::ImagePart {
-                            r#type: PartType::Image,
+                            part_type: PartType::Image,
                             image_data: s,
                             mime_type: None,
                             is_base64: false,
@@ -784,7 +869,7 @@ mod llms_sdk {
                             )));
                         }
                         Ok(MessagePart::ImagePart {
-                            r#type: PartType::Image,
+                            part_type: PartType::Image,
                             image_data: BASE64_STANDARD.encode(&data),
                             mime_type: Some(format.media_type().to_owned()),
                             is_base64: true,
@@ -802,7 +887,7 @@ mod llms_sdk {
                         )));
                     }
                     Ok(MessagePart::ImagePart {
-                        r#type: PartType::Image,
+                        part_type: PartType::Image,
                         image_data: BASE64_STANDARD.encode(&data),
                         mime_type: Some(format.media_type().to_owned()),
                         is_base64: true,
@@ -819,7 +904,7 @@ mod llms_sdk {
                     )));
                 }
                 Ok(MessagePart::ImagePart {
-                    r#type: PartType::Image,
+                    part_type: PartType::Image,
                     image_data: BASE64_STANDARD.encode(&data),
                     mime_type: Some(format.media_type().to_owned()),
                     is_base64: true,
@@ -828,6 +913,14 @@ mod llms_sdk {
         }
     }
 
+    /// Convenience constructor for an audio part.
+    ///
+    /// Args:
+    ///     input: Either a file path string, or raw ``bytes``.
+    ///
+    /// Returns:
+    ///     A :py:class:`MessagePart` configured as ``AudioPart``.
+    #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(signature = (input, /), name = "AudioPart")]
     pub fn audio_part(input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
@@ -835,7 +928,7 @@ mod llms_sdk {
             Either::Left(file) => {
                 let intermediate = AudioPart::try_from_file(file)?;
                 Ok(MessagePart::AudioPart {
-                    r#type: PartType::Audio,
+                    part_type: PartType::Audio,
                     audio_data: intermediate.data,
                     mime_type: intermediate.mime_type,
                 })
@@ -844,7 +937,7 @@ mod llms_sdk {
                 let intermediate = AudioPart::try_from_bytes(data)
                     .map_err(|e| PyValueError::new_err(e.to_string()))?;
                 Ok(MessagePart::AudioPart {
-                    r#type: PartType::Audio,
+                    part_type: PartType::Audio,
                     audio_data: intermediate.data,
                     mime_type: intermediate.mime_type,
                 })
@@ -852,6 +945,17 @@ mod llms_sdk {
         }
     }
 
+    /// Convenience constructor for a document part.
+    ///
+    /// Supports PDF and plain-text files.  When *input* is a path the MIME
+    /// type is inferred automatically; raw ``bytes`` must be a PDF.
+    ///
+    /// Args:
+    ///     input: Either a file path / URL string, or raw ``bytes``.
+    ///
+    /// Returns:
+    ///     A :py:class:`MessagePart` configured as ``DocumentPart``.
+    #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(signature = (input, /), name = "DocumentPart")]
     pub fn document_part(input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
@@ -860,7 +964,7 @@ mod llms_sdk {
                 Ok(u) => {
                     if matches!(u.scheme(), "http" | "https") {
                         Ok(MessagePart::DocumentPart {
-                            r#type: PartType::Document,
+                            part_type: PartType::Document,
                             document_data: s,
                             mime_type: None,
                             is_base64: false,
@@ -875,7 +979,7 @@ mod llms_sdk {
                         if format.media_type() == "application/pdf" {
                             let data = fs::read(&s)?;
                             Ok(MessagePart::DocumentPart {
-                                r#type: PartType::Document,
+                                part_type: PartType::Document,
                                 document_data: BASE64_STANDARD.encode(data),
                                 mime_type: Some("application/pdf".to_string()),
                                 is_base64: true,
@@ -883,7 +987,7 @@ mod llms_sdk {
                         } else if format.media_type().starts_with("text/") {
                             let data = fs::read_to_string(&s)?;
                             Ok(MessagePart::DocumentPart {
-                                r#type: PartType::Document,
+                                part_type: PartType::Document,
                                 document_data: data,
                                 mime_type: Some("text/plain".to_string()),
                                 is_base64: false,
@@ -903,7 +1007,7 @@ mod llms_sdk {
                     if format.media_type() == "application/pdf" {
                         let data = fs::read(&s)?;
                         Ok(MessagePart::DocumentPart {
-                            r#type: PartType::Document,
+                            part_type: PartType::Document,
                             document_data: BASE64_STANDARD.encode(data),
                             mime_type: Some("application/pdf".to_string()),
                             is_base64: true,
@@ -911,7 +1015,7 @@ mod llms_sdk {
                     } else if format.media_type().starts_with("text/") {
                         let data = fs::read_to_string(&s)?;
                         Ok(MessagePart::DocumentPart {
-                            r#type: PartType::Document,
+                            part_type: PartType::Document,
                             document_data: data,
                             mime_type: Some("text/plain".to_string()),
                             is_base64: false,
@@ -933,7 +1037,7 @@ mod llms_sdk {
                     )));
                 }
                 Ok(MessagePart::DocumentPart {
-                    r#type: PartType::Document,
+                    part_type: PartType::Document,
                     document_data: BASE64_STANDARD.encode(&data),
                     mime_type: Some(format.media_type().to_owned()),
                     is_base64: true,
@@ -942,15 +1046,33 @@ mod llms_sdk {
         }
     }
 
+    /// Convenience constructor for a text part.
+    ///
+    /// Args:
+    ///     text: The text payload.
+    ///
+    /// Returns:
+    ///     A :py:class:`MessagePart` configured as ``TextPart``.
+    #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(name = "TextPart")]
     pub fn text_part(text: String) -> MessagePart {
         MessagePart::TextPart {
-            r#type: PartType::Text,
+            part_type: PartType::Text,
             text,
         }
     }
 
+    /// Convenience constructor for a tool-call part.
+    ///
+    /// Args:
+    ///     tool_call_id: Unique identifier for this tool call.
+    ///     function_name: Name of the tool / function to invoke.
+    ///     arguments: JSON-encoded argument string.
+    ///
+    /// Returns:
+    ///     A :py:class:`MessagePart` configured as ``ToolCallPart``.
+    #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(name = "ToolCallPart")]
     pub fn tool_call_part(
@@ -959,28 +1081,46 @@ mod llms_sdk {
         arguments: String,
     ) -> MessagePart {
         MessagePart::ToolCallPart {
-            r#type: PartType::ToolCall,
+            part_type: PartType::ToolCall,
             id: tool_call_id,
             name: function_name,
             arguments,
         }
     }
 
+    /// Convenience constructor for a tool-result part.
+    ///
+    /// Args:
+    ///     tool_call_id: Identifier matching the original :py:func:`ToolCallPart`.
+    ///     result: String result produced by the tool.
+    ///
+    /// Returns:
+    ///     A :py:class:`MessagePart` configured as ``ToolResultPart``.
+    #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(name = "ToolResultPart")]
     pub fn tool_result_part(tool_call_id: String, result: String) -> MessagePart {
         MessagePart::ToolResultPart {
-            r#type: PartType::ToolResult,
+            part_type: PartType::ToolResult,
             tool_call_id,
             result,
         }
     }
 
+    /// Convenience constructor for a reasoning / thinking part.
+    ///
+    /// Args:
+    ///     thinking: The model's internal reasoning text.
+    ///     signature: Optional signature block (provider-specific).
+    ///
+    /// Returns:
+    ///     A :py:class:`MessagePart` configured as ``ThinkingPart``.
+    #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(signature = (thinking, signature = None), name = "ThinkingPart")]
     pub fn thinking_part(thinking: String, signature: Option<String>) -> MessagePart {
         MessagePart::ThinkingPart {
-            r#type: PartType::Thinking,
+            part_type: PartType::Thinking,
             thinking,
             signature,
         }
@@ -989,14 +1129,14 @@ mod llms_sdk {
     impl From<MessagePart> for NativeMessagePart {
         fn from(value: MessagePart) -> Self {
             match value {
-                MessagePart::TextPart { text, r#type: _ } => {
+                MessagePart::TextPart { text, part_type: _ } => {
                     NativeMessagePart::Text(TextPart { text })
                 }
                 MessagePart::ImagePart {
                     image_data,
                     is_base64,
                     mime_type,
-                    r#type: _,
+                    part_type: _,
                 } => NativeMessagePart::Image(ImagePart {
                     data: image_data,
                     is_base64,
@@ -1005,7 +1145,7 @@ mod llms_sdk {
                 MessagePart::AudioPart {
                     audio_data,
                     mime_type,
-                    r#type: _,
+                    part_type: _,
                 } => NativeMessagePart::Audio(AudioPart {
                     data: audio_data,
                     mime_type,
@@ -1014,7 +1154,7 @@ mod llms_sdk {
                     document_data,
                     mime_type,
                     is_base64,
-                    r#type: _,
+                    part_type: _,
                 } => NativeMessagePart::Document(DocumentPart {
                     data: document_data,
                     mime_type,
@@ -1024,7 +1164,7 @@ mod llms_sdk {
                     id,
                     name,
                     arguments,
-                    r#type: _,
+                    part_type: _,
                 } => NativeMessagePart::ToolCall(ToolCallPart {
                     id,
                     name,
@@ -1033,7 +1173,7 @@ mod llms_sdk {
                 MessagePart::ToolResultPart {
                     tool_call_id,
                     result,
-                    r#type: _,
+                    part_type: _,
                 } => NativeMessagePart::ToolResult(ToolResultPart {
                     tool_call_id,
                     result,
@@ -1041,7 +1181,7 @@ mod llms_sdk {
                 MessagePart::ThinkingPart {
                     thinking,
                     signature,
-                    r#type: _,
+                    part_type: _,
                 } => NativeMessagePart::Thinking(ThinkingPart {
                     thinking,
                     signature,
@@ -1054,33 +1194,33 @@ mod llms_sdk {
         fn from(value: NativeMessagePart) -> Self {
             match value {
                 NativeMessagePart::Text(t) => MessagePart::TextPart {
-                    r#type: PartType::Text,
+                    part_type: PartType::Text,
                     text: t.text,
                 },
                 NativeMessagePart::Audio(a) => MessagePart::AudioPart {
-                    r#type: PartType::Audio,
+                    part_type: PartType::Audio,
                     audio_data: a.data,
                     mime_type: a.mime_type,
                 },
                 NativeMessagePart::Image(i) => MessagePart::ImagePart {
-                    r#type: PartType::Image,
+                    part_type: PartType::Image,
                     image_data: i.data,
                     is_base64: i.is_base64,
                     mime_type: i.mime_type,
                 },
                 NativeMessagePart::Thinking(t) => MessagePart::ThinkingPart {
-                    r#type: PartType::Thinking,
+                    part_type: PartType::Thinking,
                     thinking: t.thinking,
                     signature: t.signature,
                 },
                 NativeMessagePart::ToolCall(tc) => MessagePart::ToolCallPart {
-                    r#type: PartType::ToolCall,
+                    part_type: PartType::ToolCall,
                     id: tc.id,
                     name: tc.name,
                     arguments: tc.arguments,
                 },
                 NativeMessagePart::ToolResult(tr) => MessagePart::ToolResultPart {
-                    r#type: PartType::ToolResult,
+                    part_type: PartType::ToolResult,
                     tool_call_id: tr.tool_call_id,
                     result: tr.result,
                 },
@@ -1089,6 +1229,8 @@ mod llms_sdk {
         }
     }
 
+    /// Role of a participant in the conversation.
+    #[gen_stub_pyclass_enum]
     #[pyclass(from_py_object, frozen, eq, hash)]
     #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
     pub enum MessageRole {
@@ -1098,8 +1240,13 @@ mod llms_sdk {
         Tool,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl MessageRole {
+        /// Parse a role from its string representation.
+        ///
+        /// Args:
+        ///     role: One of ``"user"``, ``"assistant"``, ``"system"``, ``"tool"``.
         #[new]
         fn new(role: String) -> PyResult<Self> {
             match role.as_str() {
@@ -1155,6 +1302,10 @@ mod llms_sdk {
         }
     }
 
+    /// A single message in the conversation history.
+    ///
+    /// Consists of a :py:class:`MessageRole` and a list of :py:class:`MessagePart`s.
+    #[gen_stub_pyclass]
     #[pyclass(frozen)]
     #[derive(Debug, FromPyObject)]
     pub struct Message {
@@ -1184,24 +1335,33 @@ mod llms_sdk {
         }
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl Message {
+        /// Create a new message.
+        ///
+        /// Args:
+        ///     role: Conversation role (see :py:class:`MessageRole`).
+        ///     content: List of :py:class:`MessagePart` objects.
         #[new]
         fn new(role: String, content: Vec<MessagePart>) -> PyResult<Self> {
             let rl = MessageRole::new(role)?;
             Ok(Self { role: rl, content })
         }
 
+        /// The role of this message.
         #[getter]
         fn role(&self) -> MessageRole {
             self.role
         }
 
+        /// The content parts that make up this message.
         #[getter]
         fn content(&self) -> Vec<MessagePart> {
             self.content.iter().map(|c| c.as_clone()).collect()
         }
 
+        /// Convert the message to a plain Python ``dict``.
         fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
             let d = PyDict::new(py);
             let content_ls = PyList::empty(py);
@@ -1227,6 +1387,11 @@ mod llms_sdk {
         }
     }
 
+    /// Definition of a tool (function) that the model may call.
+    ///
+    /// The *parameters_dict* must be a valid JSON Schema describing the
+    /// arguments the tool accepts.
+    #[gen_stub_pyclass]
     #[pyclass(from_py_object, frozen)]
     #[derive(Clone, Debug)]
     pub struct Tool {
@@ -1235,8 +1400,15 @@ mod llms_sdk {
         parameters: Schema,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl Tool {
+        /// Create a new tool definition.
+        ///
+        /// Args:
+        ///     name: Tool / function name.
+        ///     description: Human-readable description for the model.
+        ///     parameters_dict: A Python ``dict`` that is a valid JSON Schema.
         #[new]
         fn new(
             name: String,
@@ -1262,16 +1434,19 @@ mod llms_sdk {
             })
         }
 
+        /// Tool name.
         #[getter]
         fn name(&self) -> String {
             self.name.clone()
         }
 
+        /// Tool description.
         #[getter]
         fn description(&self) -> String {
             self.description.clone()
         }
 
+        /// JSON Schema for the tool's parameters (as a Python ``dict``).
         #[getter]
         fn parameters<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
             let value: Value = self.parameters.clone().into();
@@ -1289,6 +1464,11 @@ mod llms_sdk {
         }
     }
 
+    /// Structured-output format definition.
+    ///
+    /// When supplied in a :py:class:`LLMRequest`, the model is asked to produce
+    /// output conforming to the given JSON Schema.
+    #[gen_stub_pyclass]
     #[pyclass(from_py_object, frozen)]
     #[derive(Debug, Clone)]
     pub struct OutputFormat {
@@ -1297,8 +1477,15 @@ mod llms_sdk {
         schema: Schema,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl OutputFormat {
+        /// Create a new output format.
+        ///
+        /// Args:
+        ///     name: Short name for the schema.
+        ///     description: Description of what the schema represents.
+        ///     schema_dict: A Python ``dict`` that is a valid JSON Schema.
         #[new]
         fn new(name: String, description: String, schema_dict: Bound<'_, PyAny>) -> PyResult<Self> {
             let value: Value = depythonize(&schema_dict).map_err(|e| {
@@ -1320,16 +1507,19 @@ mod llms_sdk {
             })
         }
 
+        /// Format name.
         #[getter]
         fn name(&self) -> String {
             self.name.clone()
         }
 
+        /// Format description.
         #[getter]
         fn description(&self) -> String {
             self.description.clone()
         }
 
+        /// JSON Schema as a Python ``dict``.
         #[getter]
         fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
             let value: Value = self.schema.clone().into();
@@ -1347,6 +1537,8 @@ mod llms_sdk {
         }
     }
 
+    /// Supported LLM API providers.
+    #[gen_stub_pyclass_enum]
     #[pyclass(from_py_object, frozen, eq, hash)]
     #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
     pub enum ApiType {
@@ -1354,8 +1546,13 @@ mod llms_sdk {
         Anthropic,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl ApiType {
+        /// Parse an API type from its string representation.
+        ///
+        /// Args:
+        ///     api_type: ``"openai"`` or ``"anthropic"``.
         #[new]
         fn new(api_type: String) -> PyResult<Self> {
             match api_type.as_str() {
@@ -1392,6 +1589,8 @@ mod llms_sdk {
         }
     }
 
+    /// Controls how much reasoning the model should perform.
+    #[gen_stub_pyclass_enum]
     #[pyclass(from_py_object, frozen, eq, hash)]
     #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
     pub enum ReasoningEffort {
@@ -1404,8 +1603,14 @@ mod llms_sdk {
         Maximum,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl ReasoningEffort {
+        /// Parse a reasoning-effort level from its string representation.
+        ///
+        /// Args:
+        ///     effort: One of ``"none"``, ``"minimal"``, ``"low"``, ``"medium"``,
+        ///         ``"high"``, ``"xhigh"``, ``"max"`` / ``"maximum"``.
         #[new]
         fn new(effort: String) -> PyResult<Self> {
             match effort.as_str() {
@@ -1462,6 +1667,8 @@ mod llms_sdk {
         }
     }
 
+    /// Controls whether the model is allowed to call tools.
+    #[gen_stub_pyclass_enum]
     #[pyclass(from_py_object, frozen, eq, hash)]
     #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
     pub enum ToolChoice {
@@ -1470,8 +1677,13 @@ mod llms_sdk {
         Required,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl ToolChoice {
+        /// Parse a tool-choice policy from its string representation.
+        ///
+        /// Args:
+        ///     tool_choice: ``"none"``, ``"auto"`` or ``"required"``.
         #[new]
         fn new(tool_choice: String) -> PyResult<Self> {
             match tool_choice.as_str() {
@@ -1512,13 +1724,19 @@ mod llms_sdk {
         }
     }
 
+    /// Configuration for a single LLM request.
+    ///
+    /// All fields have sensible defaults where applicable.  The only required
+    /// arguments at construction time are *model*, *api_key*, *messages* and
+    /// *stream*.
+    #[gen_stub_pyclass]
     #[pyclass]
     #[derive(Debug, FromPyObject)]
     pub struct LLMRequest {
         /// Target API provider.
         #[pyo3(get)]
         pub api_type: ApiType,
-        /// Custom base URL for the API. When `None`, the provider's default is used.
+        /// Custom base URL for the API. When ``None``, the provider's default is used.
         #[pyo3(get)]
         pub base_url: Option<String>,
         /// API key used to authenticate the request.
@@ -1561,8 +1779,27 @@ mod llms_sdk {
         pub parallel_tool_calls: bool,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl LLMRequest {
+        /// Build a request with explicit parameters.
+        ///
+        /// Args:
+        ///     model: Model identifier (e.g. ``"gpt-4o"``).
+        ///     api_key: Provider API key.
+        ///     messages: List of :py:class:`Message` objects.
+        ///     stream: Whether to request a streaming response.
+        ///     api_type: ``"openai"`` (default) or ``"anthropic"``.
+        ///     base_url: Override the provider's default base URL.
+        ///     max_output_tokens: Hard limit on generated tokens.
+        ///     temperature: Sampling temperature (0 = deterministic).
+        ///     top_p: Nucleus-sampling threshold.
+        ///     reasoning_effort: Reasoning level as a string (see :py:class:`ReasoningEffort`).
+        ///     prompt_cache_ttl: Provider-specific cache TTL hint.
+        ///     output_format: Structured-output schema (see :py:class:`OutputFormat`).
+        ///     tool_choice: Tool-calling policy as a string (see :py:class:`ToolChoice`).
+        ///     tools: List of :py:class:`Tool` definitions.
+        ///     parallel_tool_calls: Allow the model to call multiple tools at once.
         #[new]
         #[pyo3(signature = (
             model,
@@ -1627,6 +1864,13 @@ mod llms_sdk {
             })
         }
 
+        /// Create a request using OpenAI-compatible defaults.
+        ///
+        /// Args:
+        ///     api_key: Provider API key.
+        ///     messages: List of :py:class:`Message` objects.
+        ///     model: Model identifier.
+        ///     stream: Whether to request a streaming response (default ``False``).
         #[classmethod]
         #[pyo3(signature = (api_key, messages, model, stream = false))]
         fn from_defaults(
@@ -1655,6 +1899,7 @@ mod llms_sdk {
             }
         }
 
+        /// Conversation messages.
         #[getter]
         fn messages(&self) -> Vec<Message> {
             self.messages.iter().map(|m| m.as_clone()).collect()
@@ -1697,6 +1942,8 @@ mod llms_sdk {
         }
     }
 
+    /// Token-usage statistics for a completed request.
+    #[gen_stub_pyclass]
     #[pyclass(from_py_object, frozen, eq)]
     #[derive(Debug, Clone, Eq, PartialEq)]
     pub struct LLMUsage {
@@ -1717,6 +1964,47 @@ mod llms_sdk {
         pub other_tokens: Option<HashMap<String, u32>>,
     }
 
+    #[gen_stub_pymethods]
+    #[pymethods]
+    impl LLMUsage {
+        /// Create a usage object.
+        ///
+        /// Args:
+        ///     input_tokens: Prompt tokens consumed.
+        ///     output_tokens: Tokens generated.
+        ///     cache_read_tokens: Tokens served from cache (optional).
+        ///     cache_write_tokens: Tokens written to cache (optional).
+        ///     other_tokens: Provider-specific extra counters (optional).
+        #[new]
+        fn new(
+            input_tokens: u32,
+            output_tokens: u32,
+            cache_read_tokens: Option<u32>,
+            cache_write_tokens: Option<u32>,
+            other_tokens: Option<HashMap<String, u32>>,
+        ) -> Self {
+            Self {
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                other_tokens,
+            }
+        }
+
+        /// Convert to a plain Python ``dict``.
+        fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+            d.set_item("input_tokens", self.input_tokens)?;
+            d.set_item("output_tokens", self.output_tokens)?;
+            d.set_item("cache_read_tokens", self.cache_read_tokens)?;
+            d.set_item("cache_write_tokens", self.cache_write_tokens)?;
+            d.set_item("other_tokens", self.output_tokens)?;
+
+            Ok(d)
+        }
+    }
+
     impl From<NativeLLMUsage> for LLMUsage {
         fn from(value: NativeLLMUsage) -> Self {
             Self {
@@ -1729,6 +2017,8 @@ mod llms_sdk {
         }
     }
 
+    /// Non-streaming response from an LLM.
+    #[gen_stub_pyclass]
     #[pyclass(frozen)]
     #[derive(Debug, FromPyObject)]
     pub struct LLMResponse {
@@ -1745,8 +2035,16 @@ mod llms_sdk {
         pub usage: LLMUsage,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl LLMResponse {
+        /// Create a response object.
+        ///
+        /// Args:
+        ///     id: Provider-generated response ID.
+        ///     message: The generated :py:class:`Message`.
+        ///     usage: :py:class:`LLMUsage` statistics.
+        ///     created_at: Unix timestamp (optional).
         #[new]
         #[pyo3(signature = (id, message, usage, created_at = None))]
         fn new(id: String, message: Message, usage: LLMUsage, created_at: Option<u64>) -> Self {
@@ -1758,9 +2056,22 @@ mod llms_sdk {
             }
         }
 
+        /// The generated message.
         #[getter]
         fn message(&self) -> Message {
             self.message.as_clone()
+        }
+
+        /// Convert to a plain Python ``dict``.
+        fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+
+            d.set_item("id", self.id.clone())?;
+            d.set_item("message", self.message.to_dict(py)?)?;
+            d.set_item("usage", self.usage.to_dict(py)?)?;
+            d.set_item("created_at", self.created_at)?;
+
+            Ok(d)
         }
     }
 
@@ -1775,6 +2086,8 @@ mod llms_sdk {
         }
     }
 
+    /// A text delta emitted while streaming a response.
+    #[gen_stub_pyclass]
     #[pyclass(from_py_object, frozen, eq)]
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct StreamTextPart {
@@ -1792,8 +2105,16 @@ mod llms_sdk {
         stop: bool,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl StreamTextPart {
+        /// Create a text-delta object.
+        ///
+        /// Args:
+        ///     response_id: Parent response identifier.
+        ///     created_at: Unix timestamp (optional).
+        ///     text_delta: Chunk of text, if any.
+        ///     stop: ``True`` when this is the final delta.
         #[new]
         fn new(
             response_id: String,
@@ -1808,8 +2129,21 @@ mod llms_sdk {
                 stop,
             }
         }
+
+        /// Convert to a plain Python ``dict``.
+        fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+            d.set_item("response_id", self.response_id.clone())?;
+            d.set_item("created_at", self.created_at)?;
+            d.set_item("text_delta", self.text_delta.clone())?;
+            d.set_item("stop", self.stop)?;
+
+            Ok(d)
+        }
     }
 
+    /// A reasoning / thinking delta emitted while streaming.
+    #[gen_stub_pyclass]
     #[pyclass(from_py_object, frozen, eq)]
     #[derive(Debug, Clone, Eq, PartialEq)]
     pub struct StreamThinkingPart {
@@ -1824,8 +2158,15 @@ mod llms_sdk {
         thinking_delta: Option<String>,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl StreamThinkingPart {
+        /// Create a thinking-delta object.
+        ///
+        /// Args:
+        ///     response_id: Parent response identifier.
+        ///     created_at: Unix timestamp (optional).
+        ///     thinking_delta: Chunk of reasoning text, if any.
         #[new]
         fn new(
             response_id: String,
@@ -1838,8 +2179,20 @@ mod llms_sdk {
                 thinking_delta,
             }
         }
+
+        /// Convert to a plain Python ``dict``.
+        fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+            d.set_item("response_id", self.response_id.clone())?;
+            d.set_item("created_at", self.created_at)?;
+            d.set_item("thinking_delta", self.thinking_delta.clone())?;
+
+            Ok(d)
+        }
     }
 
+    /// An in-progress tool-call delta emitted while streaming.
+    #[gen_stub_pyclass]
     #[pyclass(from_py_object, frozen, eq)]
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct StreamToolCallPart {
@@ -1857,8 +2210,16 @@ mod llms_sdk {
         partial_arguments: String,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl StreamToolCallPart {
+        /// Create a tool-call delta object.
+        ///
+        /// Args:
+        ///     response_id: Parent response identifier.
+        ///     tool_call_id: Identifier for this tool call.
+        ///     name: Tool name.
+        ///     partial_arguments: JSON arguments accumulated so far.
         #[new]
         fn new(
             response_id: String,
@@ -1873,8 +2234,21 @@ mod llms_sdk {
                 partial_arguments,
             }
         }
+
+        /// Convert to a plain Python ``dict``.
+        fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+            d.set_item("response_id", self.response_id.clone())?;
+            d.set_item("tool_call_id", self.tool_call_id.clone())?;
+            d.set_item("name", self.name.clone())?;
+            d.set_item("partial_arguments", self.partial_arguments.clone())?;
+
+            Ok(d)
+        }
     }
 
+    /// Final part of a streaming response, carrying the assembled result.
+    #[gen_stub_pyclass]
     #[pyclass(frozen)]
     #[derive(Debug, FromPyObject)]
     pub struct StreamEndPart {
@@ -1910,8 +2284,18 @@ mod llms_sdk {
         }
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl StreamEndPart {
+        /// Create a stream-end object.
+        ///
+        /// Args:
+        ///     id: Provider-generated response ID.
+        ///     created_at: Unix timestamp (optional).
+        ///     deltas: All :py:class:`StreamTextPart` deltas.
+        ///     thinking_deltas: All :py:class:`StreamThinkingPart` deltas (optional).
+        ///     usage: Final :py:class:`LLMUsage` (optional).
+        ///     message: Assembled :py:class:`Message`.
         #[new]
         fn new(
             id: String,
@@ -1931,12 +2315,53 @@ mod llms_sdk {
             }
         }
 
+        /// The fully assembled message.
         #[getter]
         fn message(&self) -> Message {
             self.message.as_clone()
         }
+
+        /// Convert to a plain Python ``dict``.
+        fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+            d.set_item("id", self.id.clone())?;
+            d.set_item("created_at", self.created_at)?;
+            d.set_item(
+                "deltas",
+                self.deltas
+                    .iter()
+                    .map(|d| {
+                        d.to_dict(py)
+                            .expect("deltas should correctly convert to dict")
+                    })
+                    .collect::<Vec<Bound<'py, PyDict>>>(),
+            )?;
+            d.set_item(
+                "thinking_deltas",
+                self.thinking_deltas.clone().map(|t| {
+                    t.iter()
+                        .map(|t| {
+                            t.to_dict(py)
+                                .expect("thiking_deltas should correctly convert to dict")
+                        })
+                        .collect::<Vec<Bound<'py, PyDict>>>()
+                }),
+            )?;
+            d.set_item("message", self.message.to_dict(py)?)?;
+            d.set_item(
+                "usage",
+                self.usage.clone().map(|u| {
+                    u.to_dict(py)
+                        .expect("LLMUsage should correctly convert to dict")
+                }),
+            )?;
+
+            Ok(d)
+        }
     }
 
+    /// Discriminator for the different kinds of streaming parts.
+    #[gen_stub_pyclass_enum]
     #[pyclass(from_py_object, frozen, eq, hash)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum StreamPartType {
@@ -1946,8 +2371,13 @@ mod llms_sdk {
         End,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl StreamPartType {
+        /// Parse a stream-part type from its string representation.
+        ///
+        /// Args:
+        ///     part_type: ``"text"``, ``"thinking"``, ``"tool_call"`` or ``"end"``.
         #[new]
         fn new(part_type: String) -> PyResult<Self> {
             match part_type.as_str() {
@@ -1981,11 +2411,15 @@ mod llms_sdk {
         }
     }
 
+    /// A single item yielded by an async streaming response.
+    ///
+    /// Inspect ``type`` to determine which optional field is populated.
+    #[gen_stub_pyclass]
     #[pyclass(frozen)]
     #[derive(Debug, FromPyObject)]
     pub struct StreamPart {
         #[pyo3(get, name = "type")]
-        r#type: StreamPartType,
+        part_type: StreamPartType,
         #[pyo3(get)]
         text: Option<StreamTextPart>,
         #[pyo3(get)]
@@ -1995,8 +2429,17 @@ mod llms_sdk {
         end: Option<StreamEndPart>,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl StreamPart {
+        /// Create a stream part.
+        ///
+        /// Args:
+        ///     part_type: The discriminator (:py:class:`StreamPartType`).
+        ///     text: Populated when ``type == StreamPartType.Text``.
+        ///     tool_call: Populated when ``type == StreamPartType.ToolCall``.
+        ///     thinking: Populated when ``type == StreamPartType.Thinking``.
+        ///     end: Populated when ``type == StreamPartType.End``.
         #[new]
         fn new(
             part_type: StreamPartType,
@@ -2006,7 +2449,7 @@ mod llms_sdk {
             end: Option<StreamEndPart>,
         ) -> Self {
             Self {
-                r#type: part_type,
+                part_type,
                 text,
                 tool_call,
                 thinking,
@@ -2014,16 +2457,54 @@ mod llms_sdk {
             }
         }
 
+        /// The end-of-stream payload (only when ``type == StreamPartType.End``).
         #[getter]
         fn end(&self) -> Option<StreamEndPart> {
             self.end.as_ref().map(|m| m.as_clone())
+        }
+
+        /// Convert to a plain Python ``dict``.
+        fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            let d = PyDict::new(py);
+            d.set_item("type", self.part_type.__str__())?;
+            d.set_item(
+                "text",
+                self.text.clone().map(|t| {
+                    t.to_dict(py)
+                        .expect("StreamTextPart should convert to dictionary")
+                }),
+            )?;
+            d.set_item(
+                "thinking",
+                self.thinking.clone().map(|t| {
+                    t.to_dict(py)
+                        .expect("StreamThinkingPart should convert to dictionary")
+                }),
+            )?;
+            d.set_item(
+                "tool_call",
+                self.tool_call.clone().map(|t| {
+                    t.to_dict(py)
+                        .expect("StreamToolCallPart should convert to dictionary")
+                }),
+            )?;
+            d.set_item(
+                "end",
+                self.end.as_ref().map(|t| {
+                    t.as_clone()
+                        .to_dict(py)
+                        .expect("StreamEndPart should convert to dictionary")
+                }),
+            )?;
+
+            Ok(d)
         }
     }
 
     impl From<LLMStreamingDelta> for StreamPart {
         fn from(value: LLMStreamingDelta) -> Self {
             Self {
-                r#type: StreamPartType::Text,
+                part_type: StreamPartType::Text,
                 text: Some(StreamTextPart {
                     text_delta: value.delta,
                     response_id: value.response_id,
@@ -2040,7 +2521,7 @@ mod llms_sdk {
     impl From<LLMThinkingDelta> for StreamPart {
         fn from(value: LLMThinkingDelta) -> Self {
             Self {
-                r#type: StreamPartType::Thinking,
+                part_type: StreamPartType::Thinking,
                 text: None,
                 tool_call: None,
                 end: None,
@@ -2056,7 +2537,7 @@ mod llms_sdk {
     impl From<LLMToolDelta> for StreamPart {
         fn from(value: LLMToolDelta) -> Self {
             Self {
-                r#type: StreamPartType::ToolCall,
+                part_type: StreamPartType::ToolCall,
                 thinking: None,
                 text: None,
                 end: None,
@@ -2073,7 +2554,7 @@ mod llms_sdk {
     impl From<LLMStreamingComplete> for StreamPart {
         fn from(value: LLMStreamingComplete) -> Self {
             Self {
-                r#type: StreamPartType::End,
+                part_type: StreamPartType::End,
                 thinking: None,
                 text: None,
                 tool_call: None,
@@ -2117,6 +2598,55 @@ mod llms_sdk {
         }
     }
 
+    pub type InnerPyStream = Arc<
+        Mutex<
+            BoxStream<
+                'static,
+                Result<LLMStreamingResponse, Box<dyn std::error::Error + Send + Sync>>,
+            >,
+        >,
+    >;
+
+    /// Async iterator that yields :py:class:`StreamPart` objects.
+    ///
+    /// Created by :py:meth:`LLM.stream_response`.  Use ``async for`` to consume::
+    ///
+    ///     async for part in llm.stream_response(request):
+    ///         if part.type == StreamPartType.Text:
+    ///             print(part.text.text_delta)
+    #[gen_stub_pyclass]
+    #[pyclass]
+    pub struct PyStream {
+        inner: InnerPyStream,
+    }
+
+    #[gen_stub_pymethods]
+    #[pymethods]
+    impl PyStream {
+        /// Return ``self`` as the async iterator.
+        fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+            slf
+        }
+
+        /// Yield the next :py:class:`StreamPart` or raise ``StopAsyncIteration``.
+        fn __anext__<'p>(&self, py: Python<'p>) -> PyResult<Bound<'p, PyAny>> {
+            let inner = self.inner.clone();
+            pyo3_async_runtimes::tokio::future_into_py(py, async move {
+                let mut guard = inner.lock().await;
+                match guard.next().await {
+                    Some(Ok(item)) => Ok(StreamPart::from(item)),
+                    Some(Err(e)) => Err(PyRuntimeError::new_err(format!(
+                        "Streaming was interrupted due to the following error: {}",
+                        e
+                    ))),
+                    None => Err(PyStopAsyncIteration::new_err(())),
+                }
+            })
+        }
+    }
+
+    /// Retry policy for failed LLM requests.
+    #[gen_stub_pyclass]
     #[pyclass(from_py_object, frozen, eq)]
     #[derive(Debug, Clone, Copy, Eq, PartialEq)]
     pub struct RetryPolicy {
@@ -2145,8 +2675,16 @@ mod llms_sdk {
         }
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl RetryPolicy {
+        /// Create a retry policy.
+        ///
+        /// Args:
+        ///     max_retries: How many times to retry before giving up (default 3).
+        ///     min_retry_interval: Minimum wait between retries in ms (default 500).
+        ///     max_retry_interval: Maximum wait between retries in ms (default 3000).
+        ///     base: Exponential-backoff base (default 2).
         #[new]
         #[pyo3(signature = (max_retries = 3, min_retry_interval = 500, max_retry_interval = 3000, base = 2))]
         fn new(
@@ -2176,6 +2714,11 @@ mod llms_sdk {
         }
     }
 
+    /// LLM client.
+    ///
+    /// Create an instance and call :py:meth:`respond` for blocking-style
+    /// interaction or :py:meth:`stream_response` for async streaming.
+    #[gen_stub_pyclass]
     #[pyclass(from_py_object)]
     #[derive(Default, Clone)]
     #[allow(clippy::upper_case_acronyms)]
@@ -2183,8 +2726,13 @@ mod llms_sdk {
         inner: NativeLLM,
     }
 
+    #[gen_stub_pymethods]
     #[pymethods]
     impl LLM {
+        /// Create a new LLM client.
+        ///
+        /// Args:
+        ///     retry_policy: Optional :py:class:`RetryPolicy` for failed requests.
         #[new]
         #[pyo3(signature = (retry_policy = None))]
         fn new(retry_policy: Option<RetryPolicy>) -> Self {
@@ -2193,12 +2741,19 @@ mod llms_sdk {
             }
         }
 
+        /// Send a request and await the complete response.
+        ///
+        /// Args:
+        ///     request: The :py:class:`LLMRequest` to send.
+        ///
+        /// Returns:
+        ///     A coroutine that resolves to an :py:class:`LLMResponse`.
         fn respond<'py>(
             &self,
             py: Python<'py>,
             request: LLMRequest,
         ) -> PyResult<Bound<'py, PyAny>> {
-            let inner = self.inner; // requires NativeLLM: Clone, or Arc it
+            let inner = self.inner;
             future_into_py(py, async move {
                 let response = inner.respond(request.into()).await.map_err(|e| {
                     PyRuntimeError::new_err(format!(
@@ -2209,5 +2764,27 @@ mod llms_sdk {
                 Ok(LLMResponse::from(response))
             })
         }
+
+        /// Send a request and return an async iterator over streaming parts.
+        ///
+        /// Args:
+        ///     request: The :py:class:`LLMRequest` to send (``stream`` should be ``True``).
+        ///
+        /// Returns:
+        ///     A :py:class:`PyStream` async iterator yielding :py:class:`StreamPart` objects.
+        fn stream_response(&self, request: LLMRequest) -> PyResult<PyStream> {
+            let inner = self.inner;
+            let request = request.into();
+
+            let fut = async move { inner.stream_response(request).await };
+
+            let stream = futures::stream::once(fut).try_flatten();
+
+            Ok(PyStream {
+                inner: Arc::new(Mutex::new(Box::pin(stream))),
+            })
+        }
     }
 }
+
+define_stub_info_gatherer!(stub_info);

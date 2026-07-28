@@ -70,3 +70,6 @@ docs/_build/
 
 # Pyenv
 .python-version
+
+!src/bin
+llms_sdk_py.pyi

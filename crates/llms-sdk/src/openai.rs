@@ -846,7 +846,7 @@ impl OpenAIClient {
     pub async fn stream_response(
         &self,
         request: LLMRequest,
-    ) -> Result<LLMStream, Box<dyn std::error::Error>> {
+    ) -> Result<LLMStream, Box<dyn std::error::Error + Send + Sync>> {
         let base_url = request.base_url.clone().unwrap();
         let api_key = request.api_key.clone();
         if !request.stream {

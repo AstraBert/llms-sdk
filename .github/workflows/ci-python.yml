@@ -24,8 +24,37 @@ permissions:
   contents: read
 
 jobs:
+  stubs:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/llms-sdk-py
+      - name: Generate Python stubs
+        working-directory: crates/llms-sdk-py
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          export PYO3_PYTHON=$(which python3)
+          cargo run --bin stub_gen
+      - name: Upload stubs
+        uses: actions/upload-artifact@v6
+        with:
+          name: python-stubs
+          path: crates/llms-sdk-py/*.pyi
+
   linux:
     runs-on: ${{ matrix.platform.runner }}
+    needs: [stubs]
     strategy:
       matrix:
         platform:
@@ -46,6 +75,11 @@ jobs:
         if: ${{ contains(matrix.platform.target, 'aarch64') }}
         run: |
           echo "CFLAGS_aarch64_unknown_linux_gnu=-D__ARM_ARCH=8" >> "$GITHUB_ENV"
+      - name: Download stubs
+        uses: actions/download-artifact@v7
+        with:
+            name: python-stubs
+            path: crates/llms-sdk-py/
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -61,6 +95,7 @@ jobs:
           path: crates/llms-sdk-py/dist
 
   musllinux:
+    needs: [stubs]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -78,6 +113,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+      - name: Download stubs
+        uses: actions/download-artifact@v7
+        with:
+            name: python-stubs
+            path: crates/llms-sdk-py/
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -94,6 +134,7 @@ jobs:
 
   windows:
     runs-on: ${{ matrix.platform.runner }}
+    needs: [stubs]
     strategy:
       matrix:
         platform:
@@ -114,6 +155,11 @@ jobs:
         with:
           python-version: "3.13"
           architecture: ${{ matrix.platform.python_arch }}
+      - name: Download stubs
+        uses: actions/download-artifact@v7
+        with:
+            name: python-stubs
+            path: crates/llms-sdk-py/
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -128,6 +174,7 @@ jobs:
           path: crates/llms-sdk-py/dist
 
   macos:
+    needs: [stubs]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -143,6 +190,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+      - name: Download stubs
+        uses: actions/download-artifact@v7
+        with:
+            name: python-stubs
+            path: crates/llms-sdk-py/
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -157,11 +209,17 @@ jobs:
           path: crates/llms-sdk-py/dist
 
   sdist:
+    needs: [stubs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Download stubs
+        uses: actions/download-artifact@v7
+        with:
+            name: python-stubs
+            path: crates/llms-sdk-py/
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
