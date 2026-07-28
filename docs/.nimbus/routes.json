@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "base": "/",
+  "knownRoutes": [
+    "/404",
+    "/index",
+    "/python",
+    "/rust",
+    "/typescript"
+  ],
+  "opaqueNamespaces": []
+}

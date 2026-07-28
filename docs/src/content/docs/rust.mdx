@@ -1,25 +1,14 @@
-# llms-sdk
+---
+title: Rust
+description: Using llms-sdk from Rust.
+sidebar:
+  order: 2
+  label: Rust SDK
+---
 
-A unified Rust SDK for calling LLM APIs. It currently supports **OpenAI-compatible chat completions** and the **Anthropic Messages API** through a single request/response model.
-
-> **TypeScript / Node.js bindings are available** in [`crates/llms-sdk-ts`](./crates/llms-sdk-ts).
-
-> **Python bindings are available** in [`crates/llms-sdk-py`](./crates/llms-sdk-py).
-
-## Features
-
-- Single interface for OpenAI and Anthropic requests.
-- Text, image, audio (OpenAI), and document (Anthropic) message parts.
-- Structured JSON output via JSON Schema.
-- Tool/function calling with provider-specific serialization.
-- Streaming responses with text, tool, and reasoning deltas.
-- Configurable transient retry policy.
-- Optional CLI binary (`llms`) behind the `cli` feature.
-- TypeScript / Node.js bindings via NAPI-RS (`@cle-does-things/llms-sdk`).
+The Rust crate is the native implementation of `llms-sdk`. It provides the full feature set and powers the TypeScript and Python bindings.
 
 ## Installation
-
-### Rust
 
 Add the crate to your `Cargo.toml`:
 
@@ -34,26 +23,6 @@ Enable optional features as needed:
 [dependencies]
 llms-sdk = { version = "0.2", features = ["cli"] }
 ```
-
-### TypeScript / Node.js
-
-```bash
-npm install @cle-does-things/llms-sdk
-# or
-yarn add @cle-does-things/llms-sdk
-```
-
-See [`crates/llms-sdk-ts/README.md`](./crates/llms-sdk-ts/README.md) for TS examples and API docs.
-
-### Python
-
-```bash
-pip install llms-sdk-py
-# or
-uv add llms-sdk-py
-```
-
-See [`crates/llms-sdk-py/README.md`](./crates/llms-sdk-py/README.md) for python examples and API docs.
 
 ## Quick start
 
@@ -228,24 +197,4 @@ cargo install llms-sdk --features cli
 llms --help
 ```
 
-> _The CLI is mostly meant for testing purposes_
-
-## Tests
-
-Run unit tests:
-
-```bash
-cargo test --all-features
-```
-
-Run integration tests against live APIs (requires `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`):
-
-```bash
-RUN_INTEGRATION_TESTS=true OPENAI_API_KEY=... ANTHROPIC_API_KEY=... cargo test --all-features --test integration_test -- --ignored
-```
-
-For more details, refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
-
-## License
-
-This project is licensed under the MIT License.
+<Aside type="note">The CLI is mostly meant for testing purposes.</Aside>

@@ -1,0 +1,50 @@
+---
+interface Props {
+    srcLight: string;
+    srcDark: string;
+    alt: string;
+    class?: string;
+}
+
+const { srcLight, srcDark, alt, class: className } = Astro.props;
+---
+
+<img
+    src={srcLight}
+    alt={alt}
+    class={className}
+    data-nb-theme-img-light={srcLight}
+    data-nb-theme-img-dark={srcDark}
+/>
+
+<script>
+    import { mount } from "@cloudflare/nimbus-docs/client";
+
+    function initThemeImg(img: HTMLImageElement): () => void {
+        function update() {
+            const isDark =
+                document.documentElement.getAttribute("data-mode") === "dark";
+            const src = isDark
+                ? img.dataset.nbThemeImgDark
+                : img.dataset.nbThemeImgLight;
+            if (src && img.src !== src) {
+                img.src = src;
+            }
+        }
+
+        update();
+        const observer = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                if (m.attributeName === "data-mode") {
+                    update();
+                    break;
+                }
+            }
+        });
+        observer.observe(document.documentElement, { attributes: true });
+        return () => observer.disconnect();
+    }
+
+    // @ts-ignore Types of parameters 'img' and 'root' are incompatible
+    mount("[data-nb-theme-img-light]", initThemeImg);
+</script>

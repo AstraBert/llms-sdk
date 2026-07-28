@@ -1,0 +1,196 @@
+---
+title: TypeScript
+description: Using llms-sdk from TypeScript / Node.js.
+sidebar:
+  order: 3
+  label: TS SDK
+---
+
+TypeScript / Node.js bindings for **llms-sdk**, built with NAPI-RS. Prebuilt binaries are included for macOS, Linux, and Windows on x64 and arm64.
+
+## Installation
+
+```bash
+npm install @cle-does-things/llms-sdk
+# or
+yarn add @cle-does-things/llms-sdk
+```
+
+If your platform is not covered, the package will attempt to build from source (Rust toolchain required).
+
+## Quick start
+
+```typescript
+import { Llm, ApiType, MessageRole } from '@cle-does-things/llms-sdk'
+
+async function main() {
+  const request = {
+    apiType: ApiType.OpenAI,
+    apiKey: process.env.OPENAI_API_KEY!,
+    model: 'gpt-5.4-mini',
+    messages: [
+      {
+        role: MessageRole.User,
+        content: [{ text: 'Hello!', type: 'text' }],
+      },
+    ],
+    maxOutputTokens: 256,
+    temperature: 0.7,
+    stream: false,
+    parallelToolCalls: false,
+  }
+
+  const llm = new Llm()
+  const response = await llm.respond(request)
+  console.log(response.message.content)
+}
+
+main()
+```
+
+## Supported providers
+
+| Provider  | `ApiType` value | Default base URL               |
+| --------- | --------------- | ------------------------------ |
+| OpenAI    | `'openai'`      | `https://api.openai.com/v1`    |
+| Anthropic | `'anthropic'`   | `https://api.anthropic.com/v1` |
+
+## Multimodal input
+
+### Image
+
+```typescript
+import { imagePart } from '@cle-does-things/llms-sdk'
+
+const message = {
+  role: MessageRole.User,
+  content: [
+    { text: 'Describe this image.', type: 'text' },
+    imagePart('files/cat.jpeg'), // or a Buffer, or a URL
+  ],
+}
+```
+
+### Audio (OpenAI only)
+
+```typescript
+import { audioPart } from '@cle-does-things/llms-sdk'
+
+const message = {
+  role: MessageRole.User,
+  content: [
+    { text: 'Describe this audio.', type: 'text' },
+    audioPart('files/audio.wav'), // or a Buffer
+  ],
+}
+```
+
+### Document (Anthropic only)
+
+```typescript
+import { documentPart } from '@cle-does-things/llms-sdk'
+
+const message = {
+  role: MessageRole.User,
+  content: [
+    { text: 'Summarize this document.', type: 'text' },
+    documentPart('files/file.pdf'), // or a Buffer, or a URL
+  ],
+}
+```
+
+## Structured output
+
+```typescript
+import type { LlmRequest, OutputFormat } from '@cle-does-things/llms-sdk'
+
+const outputFormat: OutputFormat = {
+  name: 'capital',
+  description: 'Country capital',
+  schema: {
+    type: 'object',
+    properties: {
+      country: { type: 'string' },
+      capital: { type: 'string' },
+    },
+    required: ['country', 'capital'],
+  },
+}
+
+const request: LlmRequest = {
+  /* ... */
+  outputFormat,
+}
+```
+
+## Tool use
+
+```typescript
+import type { LlmRequest, Tool } from '@cle-does-things/llms-sdk'
+import { ToolChoice } from '@cle-does-things/llms-sdk'
+
+const tool: Tool = {
+  name: 'get_weather',
+  description: 'Return weather for a city.',
+  parameters: {
+    type: 'object',
+    properties: {
+      city: { type: 'string' },
+    },
+    required: ['city'],
+  },
+}
+
+const request: LlmRequest = {
+  /* ... */
+  tools: [tool],
+  toolChoice: ToolChoice.Auto,
+}
+```
+
+## Streaming
+
+Set `stream: true` and provide a callback to `streamResponse`:
+
+```typescript
+const request = { /* ... */ stream: true }
+
+await llm.streamResponse(request, (err, chunk) => {
+  if (err) {
+    console.error(err)
+    return
+  }
+  if (!chunk) return
+
+  switch (chunk.type) {
+    case 'delta':
+      process.stdout.write(chunk.textDelta ?? '')
+      break
+    case 'toolDelta':
+      console.log('Tool delta:', JSON.stringify(chunk, undefined, 2))
+      break
+    case 'thinkingDelta':
+      console.log('Thinking:', chunk.thinkingDelta)
+      break
+    case 'complete':
+      console.log('\nDone:', JSON.stringify(chunk.message, undefined, 2))
+      break
+  }
+})
+```
+
+## Retry policy
+
+`Llm` accepts an optional `RetryPolicy`:
+
+```typescript
+import { Llm } from '@cle-does-things/llms-sdk'
+
+// all intervals are in milliseconds
+const llm = new Llm({
+  maxRetries: 5,
+  minRetryInterval: 500,
+  maxRetryInterval: 3000,
+  base: 2,
+})
+```
