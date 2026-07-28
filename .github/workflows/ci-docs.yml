@@ -1,4 +1,4 @@
-name: CI - Rust
+name: CI - Docs
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
 
 jobs:
   docs-checks:
-    name: Lint
+    name: Docs Checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -33,7 +33,7 @@ jobs:
         with:
           node-version: '24.4.0'
           cache: 'pnpm'
-          cache-dependenciy-path: docs/pnpm-lock.yaml
+          cache-dependency-path: docs/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install
