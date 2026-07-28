@@ -1,0 +1,101 @@
+---
+title: llms-sdk
+description: A unified SDK for calling LLM APIs in Rust, TypeScript, and Python.
+sidebar:
+  order: 1
+  label: Introduction
+---
+
+<div class="flex justify-center">
+  <ThemeImage srcLight="/light-no-bg.png" srcDark="/dark-no-bg.png" alt="llms-sdk logo" class="w-48 h-auto mb-6" />
+</div>
+
+A single interface for **OpenAI-compatible chat completions** and the **Anthropic Messages API**, with native bindings for Rust, TypeScript, and Python.
+
+## Features
+
+- **One request model** for OpenAI and Anthropic.
+- **Multimodal input** — text, image, audio (OpenAI), and document (Anthropic) message parts.
+- **Structured JSON output** via JSON Schema.
+- **Tool / function calling** with provider-specific serialization.
+- **Streaming responses** with text, tool, and reasoning deltas.
+- **Configurable retry policy** for transient failures.
+- **Optional CLI** (`llms`) for quick testing.
+
+## Supported providers
+
+| Provider  | Endpoint style                |
+| --------- | ----------------------------- |
+| OpenAI    | `https://api.openai.com/v1`   |
+| Anthropic | `https://api.anthropic.com/v1`|
+
+## Pick your language
+
+<CardGrid>
+  <Card title="Rust" icon="ph:file-rs">
+    Native crate with full feature parity. [Get started](/rust)
+  </Card>
+  <Card title="TypeScript" icon="ph:file-tsx">
+    NAPI-RS bindings for Node.js. [Get started](/typescript)
+  </Card>
+  <Card title="Python" icon="ph:file-py">
+    PyO3 bindings for Python 3.10+. [Get started](/python)
+  </Card>
+</CardGrid>
+
+## Quick example
+
+<Tabs>
+  <TabItem label="Rust">
+    ```rust
+    use llms_sdk::{LLM, LLMRequest, Message, MessagePart, MessageRole, TextPart};
+
+    let request = LLMRequest::builder()
+        .api_key(std::env::var("OPENAI_API_KEY")?)
+        .messages(vec![Message {
+            role: MessageRole::User,
+            content: vec![MessagePart::Text(TextPart::new("Hello!"))],
+        }])
+        .model("gpt-5.4-mini")
+        .build();
+
+    let llm = LLM::default();
+    let response = llm.respond(request).await?;
+    ```
+  </TabItem>
+  <TabItem label="TypeScript">
+    ```typescript
+    import { Llm, ApiType, MessageRole } from '@cle-does-things/llms-sdk'
+
+    const request = {
+      apiType: ApiType.OpenAI,
+      apiKey: process.env.OPENAI_API_KEY!,
+      model: 'gpt-5.4-mini',
+      messages: [{
+        role: MessageRole.User,
+        content: [{ text: 'Hello!', type: 'text' }],
+      }],
+      stream: false,
+      parallelToolCalls: false,
+    }
+
+    const llm = new Llm()
+    const response = await llm.respond(request)
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    from llms_sdk_py import LLMRequest, Message, TextPart, LLM
+
+    request = LLMRequest(
+        model="gpt-5.4-mini",
+        api_key="sk-...",
+        messages=[Message("user", [TextPart("Hello, world!")])],
+        stream=False,
+    )
+
+    client = llm.LLM()
+    response = await client.respond(request)
+    ```
+  </TabItem>
+</Tabs>
