@@ -1,0 +1,2 @@
+dev = "maturin develop"
+stubs = "cargo run --bin stub_gen"

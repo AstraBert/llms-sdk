@@ -213,7 +213,7 @@ export interface LlmUsage {
   /** Tokens written to a provider cache, when applicable. */
   cacheWriteTokens?: number
   /** Any additional tokens counted by the provider. */
-  otherTokens?: number
+  otherTokens?: Record<string, number>
 }
 
 /** A single turn in the conversation. */

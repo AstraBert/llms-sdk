@@ -625,11 +625,7 @@ impl From<OpenAIUsage> for LLMUsage {
             output_tokens: value.completion_tokens,
             cache_read_tokens: Some(value.prompt_tokens_details.cached_tokens),
             cache_write_tokens: None,
-            other_tokens: Some(
-                value.prompt_tokens_details.audio_tokens
-                    + value.completion_tokens_details.audio_tokens
-                    + value.completion_tokens_details.reasoning_tokens,
-            ),
+            other_tokens: None,
         }
     }
 }
@@ -850,7 +846,7 @@ impl OpenAIClient {
     pub async fn stream_response(
         &self,
         request: LLMRequest,
-    ) -> Result<LLMStream, Box<dyn std::error::Error>> {
+    ) -> Result<LLMStream, Box<dyn std::error::Error + Send + Sync>> {
         let base_url = request.base_url.clone().unwrap();
         let api_key = request.api_key.clone();
         if !request.stream {
@@ -917,7 +913,7 @@ impl OpenAIClient {
                                 }
                             }
                             let message = deltas_to_message(&deltas, tool_calls.as_deref());
-                            yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id.clone().unwrap(), deltas: deltas.clone(), created_at: first_created, usage: resp_usage, message, tool_calls, thinking_deltas: None }))
+                            yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id.clone().unwrap(), deltas: deltas.clone(), created_at: first_created, usage: resp_usage.clone(), message, tool_calls, thinking_deltas: None }))
                         } else {
                             let json_result: Result<OpenAIStreamingMessage, serde_json::Error> = serde_json::from_str(&event.data);
                             match json_result {
@@ -1245,7 +1241,7 @@ mod tests {
         assert_eq!(llm_usage.input_tokens, 10);
         assert_eq!(llm_usage.output_tokens, 5);
         assert_eq!(llm_usage.cache_read_tokens, Some(2));
-        assert_eq!(llm_usage.other_tokens, Some(5));
+        assert_eq!(llm_usage.other_tokens, None);
     }
 
     #[test]

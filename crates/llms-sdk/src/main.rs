@@ -139,7 +139,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         request.output_format = Some(schema);
     }
     if !args.stream {
-        let response = llm.respond(request).await?;
+        let response = match llm.respond(request).await {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(std::convert::Into::<Box<dyn std::error::Error>>::into(
+                    e.to_string(),
+                ));
+            }
+        };
         for p in response.message.content {
             match p {
                 MessagePart::Text(t) => println!("{}", t.text),
@@ -154,7 +161,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        let mut stream = llm.stream_response(request).await?;
+        let mut stream = match llm.stream_response(request).await {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(std::convert::Into::<Box<dyn std::error::Error>>::into(
+                    e.to_string(),
+                ));
+            }
+        };
         while let Some(event) = stream.next().await {
             let event = event.map_err(|e| e.to_string())?;
             match event {
@@ -169,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 llms_sdk::LLMStreamingResponse::Complete(c) => println!(
                     "\n\n\x1b[38;5;247mInput Tokens: {:?}; Output Tokens: {:?}; Tool Calls: {:?}",
-                    c.usage.map_or(0, |r| r.input_tokens),
+                    c.usage.clone().map_or(0, |r| r.input_tokens),
                     c.usage.map_or(0, |r| r.output_tokens),
                     c.tool_calls.map_or(0, |r| r.len())
                 ),
