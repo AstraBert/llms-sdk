@@ -1,5 +1,171 @@
-# llms-sdk
+# llms-sdk-py
 
-A unified interface to call OpenAI- and Anthropic-compatible LLMs from Python.
+Python bindings for the [`llms-sdk`](https://github.com/cle-does-things/llms-sdk) Rust crate — a unified interface for calling OpenAI- and Anthropic-compatible LLMs.
 
-> _Python bindings for the `llms-sdk` Rust crate._
+## Installation
+
+```bash
+pip install llms-sdk-py
+# or, with uv
+uv add llms-sdk-py
+```
+
+Requires Python 3.10+.
+
+## Quick start
+
+```python
+import asyncio
+import llms_sdk_py as llm
+
+
+async def main():
+    request = llm.LLMRequest(
+        model="gpt-4o",
+        api_key="sk-...",
+        messages=[
+            llm.Message("user", [llm.TextPart("Hello, world!")])
+        ],
+        stream=False,
+    )
+
+    client = llm.LLM()
+    response = await client.respond(request)
+    print(response.message.content[0].text)
+
+
+asyncio.run(main())
+```
+
+## Streaming
+
+Set `stream=True` and iterate over the async iterator:
+
+```python
+import asyncio
+import llms_sdk_py as llm
+
+
+async def main():
+    request = llm.LLMRequest(
+        model="gpt-4o",
+        api_key="sk-...",
+        messages=[llm.Message("user", [llm.TextPart("Count to 5")])],
+        stream=True,
+    )
+
+    client = llm.LLM()
+    async for part in client.stream_response(request):
+        if str(part.type) == "text":
+            print(part.text.text_delta, end="", flush=True)
+        elif str(part.type) == "end":
+            print("\nDone!")
+
+
+asyncio.run(main())
+```
+
+## Multimodal input
+
+### Image
+
+```python
+import llms_sdk_py as llm
+
+image = llm.ImagePart("path/to/photo.jpg")      # or a URL string
+message = llm.Message("user", [
+    llm.TextPart("Describe this image."),
+    image,
+])
+```
+
+### Audio (OpenAI only)
+
+```python
+import llms_sdk_py as llm
+
+audio = llm.AudioPart("path/to/audio.wav")       # or raw bytes
+message = llm.Message("user", [
+    llm.TextPart("Transcribe this audio."),
+    audio,
+])
+```
+
+### Document (Anthropic only)
+
+```python
+import llms_sdk_py as llm
+
+doc = llm.DocumentPart("path/to/file.pdf")       # or raw bytes
+message = llm.Message("user", [
+    llm.TextPart("Summarize this document."),
+    doc,
+])
+```
+
+## Tool use
+
+```python
+import llms_sdk_py as llm
+
+tool = llm.Tool(
+    name="get_weather",
+    description="Return weather for a city.",
+    parameters_dict={
+        "type": "object",
+        "properties": {
+            "city": {"type": "string"}
+        },
+        "required": ["city"]
+    },
+)
+
+request = llm.LLMRequest(
+    model="gpt-4o",
+    api_key="sk-...",
+    messages=[llm.Message("user", [llm.TextPart("What's the weather in Paris?")])],
+    stream=False,
+    tools=[tool],
+    tool_choice="auto",
+)
+```
+
+## Structured output
+
+```python
+import llms_sdk_py as llm
+
+output_format = llm.OutputFormat(
+    name="capital",
+    description="Country capital",
+    schema_dict={
+        "type": "object",
+        "properties": {
+            "country": {"type": "string"},
+            "capital": {"type": "string"}
+        },
+        "required": ["country", "capital"]
+    },
+)
+
+request = llm.LLMRequest(
+    model="gpt-4o",
+    api_key="sk-...",
+    messages=[llm.Message("user", [llm.TextPart("France")])],
+    stream=False,
+    output_format=output_format,
+)
+```
+
+## Retry policy
+
+```python
+import llms_sdk_py as llm
+
+policy = llm.RetryPolicy(max_retries=5, min_retry_interval=1000)
+client = llm.LLM(retry_policy=policy)
+```
+
+## License
+
+MIT
