@@ -36,7 +36,14 @@ function initPageActions(root: HTMLElement): () => void {
         return;
       }
       const text = await res.text();
-      await navigator.clipboard.writeText(text);
+
+      if (typeof ClipboardItem !== "undefined") {
+        const blob = new Blob([text], { type: "text/plain" });
+        await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+      } else {
+        await navigator.clipboard.writeText(text);
+      }
+
       showState("copied");
     } catch {
       showState("error");
