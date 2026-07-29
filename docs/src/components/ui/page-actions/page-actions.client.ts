@@ -30,20 +30,24 @@ function initPageActions(root: HTMLElement): () => void {
 
   async function handleCopyPage() {
     try {
-      const res = await fetch(mdUrl!);
-      if (!res.ok) {
-        showState("error");
-        return;
-      }
-      const text = await res.text();
-
       if (typeof ClipboardItem !== "undefined") {
-        const blob = new Blob([text], { type: "text/plain" });
-        await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+        // Call clipboard.write() synchronously in the gesture handler.
+        // Pass a Promise<Blob> as the item's value — Safari will wait for it.
+        const item = new ClipboardItem({
+          "text/plain": fetch(mdUrl!).then(async (res) => {
+            if (!res.ok) throw new Error("fetch failed");
+            const text = await res.text();
+            return new Blob([text], { type: "text/plain" });
+          }),
+        });
+        await navigator.clipboard.write([item]);
       } else {
+        // Fallback: no way around this being async, this path just won't work
+        // reliably on Safari if it doesn't support ClipboardItem promises.
+        const res = await fetch(mdUrl!);
+        const text = await res.text();
         await navigator.clipboard.writeText(text);
       }
-
       showState("copied");
     } catch {
       showState("error");
