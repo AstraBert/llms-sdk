@@ -9,6 +9,7 @@ use pyo3_stub_gen::define_stub_info_gatherer;
 ///
 /// Quick start::
 ///
+/// ```python
 ///     import llms_sdk_py as llm
 ///
 ///     req = llm.LLMRequest(
@@ -19,6 +20,7 @@ use pyo3_stub_gen::define_stub_info_gatherer;
 ///     )
 ///     client = llm.LLM()
 ///     response = await client.respond(req)
+/// ```
 #[pymodule]
 mod llms_sdk_py {
     use futures::stream::{BoxStream, StreamExt, TryStreamExt};
@@ -67,8 +69,18 @@ mod llms_sdk_py {
     use pythonize::pythonize;
     use schemars::Schema;
     use serde_json::Value;
+    use std::path::PathBuf;
     use std::time::Duration;
     use url::Url;
+
+    fn path_from_file_url(input: String) -> PyResult<PathBuf> {
+        match Url::parse(&input) {
+            Ok(url) if url.scheme() == "file" => url
+                .to_file_path()
+                .map_err(|_| PyValueError::new_err("Invalid file URL")),
+            _ => Ok(input.into()),
+        }
+    }
 
     /// Discriminator for the different kinds of message parts.
     ///
@@ -135,9 +147,11 @@ mod llms_sdk_py {
     /// This is a tagged-union (variant enum).  The ``type`` attribute tells you
     /// which variant is active and therefore which other fields are available::
     ///
+    /// ```python
     ///     part = TextPart("hello")
     ///     assert part.type == PartType.Text
     ///     assert part.text == "hello"
+    /// ```
     ///
     /// Convenience constructors are provided at module level:
     /// :py:func:`TextPart`, :py:func:`ImagePart`, :py:func:`AudioPart`,
@@ -837,7 +851,7 @@ mod llms_sdk_py {
     /// Convenience constructor for an image part.
     ///
     /// Args:
-    ///     input: Either a file path / URL string, or raw ``bytes``.
+    ///     input: Either a file path, file/HTTP URL string, or raw ``bytes``.
     ///
     /// Returns:
     ///     A :py:class:`MessagePart` configured as ``ImagePart``.
@@ -847,37 +861,17 @@ mod llms_sdk_py {
     #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(signature = (input, /), name = "ImagePart")]
-    pub fn image_part(input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
-        match input {
+    pub fn image_part(py: Python<'_>, input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
+        py.detach(move || match input {
             Either::Left(s) => match Url::parse(&s) {
-                Ok(u) => {
-                    if matches!(u.scheme(), "http" | "https") {
-                        Ok(MessagePart::ImagePart {
-                            part_type: PartType::Image,
-                            image_data: s,
-                            mime_type: None,
-                            is_base64: false,
-                        })
-                    } else {
-                        let data = fs::read(&s)?;
-                        let format = file_format::FileFormat::from_bytes(&data);
-                        if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
-                            return Err(PyValueError::new_err(format!(
-                                "Unsupported image type: {}. The supported image types are: {}",
-                                format.media_type(),
-                                ALLOWED_IMAGE_TYPES.join(", ")
-                            )));
-                        }
-                        Ok(MessagePart::ImagePart {
-                            part_type: PartType::Image,
-                            image_data: BASE64_STANDARD.encode(&data),
-                            mime_type: Some(format.media_type().to_owned()),
-                            is_base64: true,
-                        })
-                    }
-                }
-                Err(_) => {
-                    let data = fs::read(&s)?;
+                Ok(url) if matches!(url.scheme(), "http" | "https") => Ok(MessagePart::ImagePart {
+                    part_type: PartType::Image,
+                    image_data: s,
+                    mime_type: None,
+                    is_base64: false,
+                }),
+                _ => {
+                    let data = fs::read(path_from_file_url(s)?)?;
                     let format = file_format::FileFormat::from_bytes(&data);
                     if !ALLOWED_IMAGE_TYPES.contains(&format.media_type()) {
                         return Err(PyValueError::new_err(format!(
@@ -910,23 +904,23 @@ mod llms_sdk_py {
                     is_base64: true,
                 })
             }
-        }
+        })
     }
 
     /// Convenience constructor for an audio part.
     ///
     /// Args:
-    ///     input: Either a file path string, or raw ``bytes``.
+    ///     input: Either a file path or file URL string, or raw ``bytes``.
     ///
     /// Returns:
     ///     A :py:class:`MessagePart` configured as ``AudioPart``.
     #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(signature = (input, /), name = "AudioPart")]
-    pub fn audio_part(input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
-        match input {
+    pub fn audio_part(py: Python<'_>, input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
+        py.detach(move || match input {
             Either::Left(file) => {
-                let intermediate = AudioPart::try_from_file(file)?;
+                let intermediate = AudioPart::try_from_file(path_from_file_url(file)?)?;
                 Ok(MessagePart::AudioPart {
                     part_type: PartType::Audio,
                     audio_data: intermediate.data,
@@ -942,7 +936,7 @@ mod llms_sdk_py {
                     mime_type: intermediate.mime_type,
                 })
             }
-        }
+        })
     }
 
     /// Convenience constructor for a document part.
@@ -951,61 +945,31 @@ mod llms_sdk_py {
     /// type is inferred automatically; raw ``bytes`` must be a PDF.
     ///
     /// Args:
-    ///     input: Either a file path / URL string, or raw ``bytes``.
+    ///     input: Either a file path, file/HTTP URL string, or raw ``bytes``.
     ///
     /// Returns:
     ///     A :py:class:`MessagePart` configured as ``DocumentPart``.
     #[gen_stub_pyfunction]
     #[pyfunction]
     #[pyo3(signature = (input, /), name = "DocumentPart")]
-    pub fn document_part(input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
-        match input {
+    pub fn document_part(py: Python<'_>, input: Either<String, Vec<u8>>) -> PyResult<MessagePart> {
+        py.detach(move || match input {
             Either::Left(s) => match Url::parse(&s) {
-                Ok(u) => {
-                    if matches!(u.scheme(), "http" | "https") {
-                        Ok(MessagePart::DocumentPart {
-                            part_type: PartType::Document,
-                            document_data: s,
-                            mime_type: None,
-                            is_base64: false,
-                        })
-                    } else {
-                        let format = file_format::FileFormat::from_file(&s).map_err(|e| {
-                            PyValueError::new_err(format!(
-                                "Could not infer format from file: {}",
-                                e
-                            ))
-                        })?;
-                        if format.media_type() == "application/pdf" {
-                            let data = fs::read(&s)?;
-                            Ok(MessagePart::DocumentPart {
-                                part_type: PartType::Document,
-                                document_data: BASE64_STANDARD.encode(data),
-                                mime_type: Some("application/pdf".to_string()),
-                                is_base64: true,
-                            })
-                        } else if format.media_type().starts_with("text/") {
-                            let data = fs::read_to_string(&s)?;
-                            Ok(MessagePart::DocumentPart {
-                                part_type: PartType::Document,
-                                document_data: data,
-                                mime_type: Some("text/plain".to_string()),
-                                is_base64: false,
-                            })
-                        } else {
-                            Err(PyValueError::new_err(format!(
-                                "Expected either a PDF or a text file, found media type: {}",
-                                format.media_type()
-                            )))
-                        }
-                    }
+                Ok(url) if matches!(url.scheme(), "http" | "https") => {
+                    Ok(MessagePart::DocumentPart {
+                        part_type: PartType::Document,
+                        document_data: s,
+                        mime_type: None,
+                        is_base64: false,
+                    })
                 }
-                Err(_) => {
-                    let format = file_format::FileFormat::from_file(&s).map_err(|e| {
+                _ => {
+                    let file = path_from_file_url(s)?;
+                    let format = file_format::FileFormat::from_file(&file).map_err(|e| {
                         PyValueError::new_err(format!("Could not infer format from file: {}", e))
                     })?;
                     if format.media_type() == "application/pdf" {
-                        let data = fs::read(&s)?;
+                        let data = fs::read(file)?;
                         Ok(MessagePart::DocumentPart {
                             part_type: PartType::Document,
                             document_data: BASE64_STANDARD.encode(data),
@@ -1013,7 +977,7 @@ mod llms_sdk_py {
                             is_base64: true,
                         })
                     } else if format.media_type().starts_with("text/") {
-                        let data = fs::read_to_string(&s)?;
+                        let data = fs::read_to_string(file)?;
                         Ok(MessagePart::DocumentPart {
                             part_type: PartType::Document,
                             document_data: data,
@@ -1043,7 +1007,7 @@ mod llms_sdk_py {
                     is_base64: true,
                 })
             }
-        }
+        })
     }
 
     /// Convenience constructor for a text part.
@@ -1999,7 +1963,7 @@ mod llms_sdk_py {
             d.set_item("output_tokens", self.output_tokens)?;
             d.set_item("cache_read_tokens", self.cache_read_tokens)?;
             d.set_item("cache_write_tokens", self.cache_write_tokens)?;
-            d.set_item("other_tokens", self.output_tokens)?;
+            d.set_item("other_tokens", &self.other_tokens)?;
 
             Ok(d)
         }
@@ -2324,37 +2288,32 @@ mod llms_sdk_py {
         /// Convert to a plain Python ``dict``.
         fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
             let d = PyDict::new(py);
+            let deltas = self
+                .deltas
+                .iter()
+                .map(|delta| delta.to_dict(py))
+                .collect::<PyResult<Vec<_>>>()?;
+            let thinking_deltas = self
+                .thinking_deltas
+                .as_ref()
+                .map(|deltas| {
+                    deltas
+                        .iter()
+                        .map(|delta| delta.to_dict(py))
+                        .collect::<PyResult<Vec<_>>>()
+                })
+                .transpose()?;
+            let usage = self
+                .usage
+                .as_ref()
+                .map(|usage| usage.to_dict(py))
+                .transpose()?;
             d.set_item("id", self.id.clone())?;
             d.set_item("created_at", self.created_at)?;
-            d.set_item(
-                "deltas",
-                self.deltas
-                    .iter()
-                    .map(|d| {
-                        d.to_dict(py)
-                            .expect("deltas should correctly convert to dict")
-                    })
-                    .collect::<Vec<Bound<'py, PyDict>>>(),
-            )?;
-            d.set_item(
-                "thinking_deltas",
-                self.thinking_deltas.clone().map(|t| {
-                    t.iter()
-                        .map(|t| {
-                            t.to_dict(py)
-                                .expect("thiking_deltas should correctly convert to dict")
-                        })
-                        .collect::<Vec<Bound<'py, PyDict>>>()
-                }),
-            )?;
+            d.set_item("deltas", deltas)?;
+            d.set_item("thinking_deltas", thinking_deltas)?;
             d.set_item("message", self.message.to_dict(py)?)?;
-            d.set_item(
-                "usage",
-                self.usage.clone().map(|u| {
-                    u.to_dict(py)
-                        .expect("LLMUsage should correctly convert to dict")
-                }),
-            )?;
+            d.set_item("usage", usage)?;
 
             Ok(d)
         }
@@ -2466,36 +2425,27 @@ mod llms_sdk_py {
         /// Convert to a plain Python ``dict``.
         fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
             let d = PyDict::new(py);
+            let text = self
+                .text
+                .as_ref()
+                .map(|text| text.to_dict(py))
+                .transpose()?;
+            let thinking = self
+                .thinking
+                .as_ref()
+                .map(|thinking| thinking.to_dict(py))
+                .transpose()?;
+            let tool_call = self
+                .tool_call
+                .as_ref()
+                .map(|tool_call| tool_call.to_dict(py))
+                .transpose()?;
+            let end = self.end.as_ref().map(|end| end.to_dict(py)).transpose()?;
             d.set_item("type", self.part_type.__str__())?;
-            d.set_item(
-                "text",
-                self.text.clone().map(|t| {
-                    t.to_dict(py)
-                        .expect("StreamTextPart should convert to dictionary")
-                }),
-            )?;
-            d.set_item(
-                "thinking",
-                self.thinking.clone().map(|t| {
-                    t.to_dict(py)
-                        .expect("StreamThinkingPart should convert to dictionary")
-                }),
-            )?;
-            d.set_item(
-                "tool_call",
-                self.tool_call.clone().map(|t| {
-                    t.to_dict(py)
-                        .expect("StreamToolCallPart should convert to dictionary")
-                }),
-            )?;
-            d.set_item(
-                "end",
-                self.end.as_ref().map(|t| {
-                    t.as_clone()
-                        .to_dict(py)
-                        .expect("StreamEndPart should convert to dictionary")
-                }),
-            )?;
+            d.set_item("text", text)?;
+            d.set_item("thinking", thinking)?;
+            d.set_item("tool_call", tool_call)?;
+            d.set_item("end", end)?;
 
             Ok(d)
         }
@@ -2611,9 +2561,11 @@ mod llms_sdk_py {
     ///
     /// Created by :py:meth:`LLM.stream_response`.  Use ``async for`` to consume::
     ///
+    /// ```python
     ///     async for part in llm.stream_response(request):
     ///         if part.type == StreamPartType.Text:
     ///             print(part.text.text_delta)
+    /// ```
     #[gen_stub_pyclass]
     #[pyclass]
     pub struct PyStream {
@@ -2783,6 +2735,58 @@ mod llms_sdk_py {
             Ok(PyStream {
                 inner: Arc::new(Mutex::new(Box::pin(stream))),
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn llm_usage_to_dict_preserves_other_tokens() {
+            Python::initialize();
+            let other_tokens = HashMap::from([("reasoning".to_string(), 2)]);
+            let usage = LLMUsage::new(1, 3, None, None, Some(other_tokens.clone()));
+
+            Python::attach(|py| {
+                let usage_dict = usage.to_dict(py).unwrap();
+                let actual = usage_dict
+                    .get_item("other_tokens")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<Option<HashMap<String, u32>>>()
+                    .unwrap();
+                assert_eq!(actual, Some(other_tokens));
+            });
+        }
+
+        #[test]
+        fn file_urls_load_image_and_document_parts() {
+            Python::initialize();
+            let files = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../llms-sdk/files");
+            let image_url = Url::from_file_path(files.join("cat.jpeg"))
+                .unwrap()
+                .to_string();
+            let document_url = Url::from_file_path(files.join("file.pdf"))
+                .unwrap()
+                .to_string();
+
+            Python::attach(|py| {
+                assert!(matches!(
+                    image_part(py, Either::Left(image_url)),
+                    Ok(MessagePart::ImagePart {
+                        is_base64: true,
+                        ..
+                    })
+                ));
+                assert!(matches!(
+                    document_part(py, Either::Left(document_url)),
+                    Ok(MessagePart::DocumentPart {
+                        is_base64: true,
+                        ..
+                    })
+                ));
+            });
         }
     }
 }
