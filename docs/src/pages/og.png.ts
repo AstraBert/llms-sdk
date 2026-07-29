@@ -9,10 +9,10 @@ export async function GET() {
     title: config.title,
     description: config.description,
     ...ogCardConfig,
-    logo: {
-      path: "public/dark-no-bg.png",
-      size: [200, 200]
-    }
+    bgGradient: [
+      [26, 26, 26],   // dark gray
+      [0, 0, 0]       // black
+    ],
   });
 
   return new Response(body, {
