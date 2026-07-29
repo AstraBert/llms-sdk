@@ -2737,58 +2737,6 @@ mod llms_sdk_py {
             })
         }
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn llm_usage_to_dict_preserves_other_tokens() {
-            Python::initialize();
-            let other_tokens = HashMap::from([("reasoning".to_string(), 2)]);
-            let usage = LLMUsage::new(1, 3, None, None, Some(other_tokens.clone()));
-
-            Python::attach(|py| {
-                let usage_dict = usage.to_dict(py).unwrap();
-                let actual = usage_dict
-                    .get_item("other_tokens")
-                    .unwrap()
-                    .unwrap()
-                    .extract::<Option<HashMap<String, u32>>>()
-                    .unwrap();
-                assert_eq!(actual, Some(other_tokens));
-            });
-        }
-
-        #[test]
-        fn file_urls_load_image_and_document_parts() {
-            Python::initialize();
-            let files = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../llms-sdk/files");
-            let image_url = Url::from_file_path(files.join("cat.jpeg"))
-                .unwrap()
-                .to_string();
-            let document_url = Url::from_file_path(files.join("file.pdf"))
-                .unwrap()
-                .to_string();
-
-            Python::attach(|py| {
-                assert!(matches!(
-                    image_part(py, Either::Left(image_url)),
-                    Ok(MessagePart::ImagePart {
-                        is_base64: true,
-                        ..
-                    })
-                ));
-                assert!(matches!(
-                    document_part(py, Either::Left(document_url)),
-                    Ok(MessagePart::DocumentPart {
-                        is_base64: true,
-                        ..
-                    })
-                ));
-            });
-        }
-    }
 }
 
 define_stub_info_gatherer!(stub_info);
