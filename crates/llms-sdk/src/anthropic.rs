@@ -125,15 +125,21 @@ pub struct AntToolCallPart {
     part_type: String,
 }
 
-impl From<ToolCallPart> for AntToolCallPart {
-    fn from(value: ToolCallPart) -> Self {
-        Self {
+impl TryFrom<ToolCallPart> for AntToolCallPart {
+    type Error = InvalidAntRequestConversion;
+
+    fn try_from(value: ToolCallPart) -> Result<Self, Self::Error> {
+        let input = serde_json::from_str(&value.arguments).map_err(|error| {
+            InvalidAntRequestConversion {
+                reason: format!("tool call arguments must be a JSON object: {error}"),
+            }
+        })?;
+        Ok(Self {
             id: value.id,
             name: value.name,
-            input: serde_json::from_str(&value.arguments)
-                .expect("Arguments should be JSON serializable"),
+            input,
             part_type: "tool_use".to_string(),
-        }
+        })
     }
 }
 
@@ -325,7 +331,7 @@ pub struct AntMessage {
 }
 
 impl TryFrom<Message> for AntMessage {
-    type Error = UnsupportedPartType;
+    type Error = InvalidAntRequestConversion;
 
     fn try_from(value: Message) -> Result<Self, Self::Error> {
         let role = AntMessageRole::from(value.role);
@@ -345,7 +351,7 @@ impl TryFrom<Message> for AntMessage {
                     content.push(AntMessagePart::Image(AntImagePart::from(i)));
                 }
                 MessagePart::ToolCall(tc) => {
-                    content.push(AntMessagePart::ToolCall(AntToolCallPart::from(tc)));
+                    content.push(AntMessagePart::ToolCall(AntToolCallPart::try_from(tc)?));
                 }
                 MessagePart::ToolResult(tr) => {
                     content.push(AntMessagePart::ToolResult(AntToolResultPart::from(tr)));
@@ -354,7 +360,8 @@ impl TryFrom<Message> for AntMessage {
                     return Err(UnsupportedPartType {
                         part_type: "audio".to_string(),
                         api_type: ApiType::Anthropic.to_string(),
-                    });
+                    }
+                    .into());
                 }
             }
         }
@@ -525,7 +532,7 @@ impl TryFrom<LLMRequest> for AntRequest {
 
     fn try_from(value: LLMRequest) -> Result<Self, Self::Error> {
         let mut messages = vec![];
-        let mut system = None;
+        let mut system: Option<String> = None;
         for m in value.messages {
             let message = AntMessage::try_from(m)?;
             match message.role {
@@ -537,7 +544,12 @@ impl TryFrom<LLMRequest> for AntRequest {
                             _ => continue,
                         }
                     }
-                    system = Some(text)
+                    if let Some(system) = &mut system {
+                        system.push('\n');
+                        system.push_str(&text);
+                    } else {
+                        system = Some(text);
+                    }
                 }
                 _ => messages.push(message),
             }
@@ -846,7 +858,7 @@ impl AntClient {
         &self,
         request: LLMRequest,
     ) -> Result<LLMResponse, Box<dyn std::error::Error>> {
-        let base_url = request.base_url.clone().unwrap();
+        let base_url = request.base_url_or_default();
         let api_key = request.api_key.clone();
         if request.stream {
             return Err(StreamParamError {
@@ -893,7 +905,7 @@ impl AntClient {
         &self,
         request: LLMRequest,
     ) -> Result<LLMStream, Box<dyn std::error::Error + Send + Sync>> {
-        let base_url = request.base_url.clone().unwrap();
+        let base_url = request.base_url_or_default();
         let api_key = request.api_key.clone();
         if !request.stream {
             return Err(StreamParamError {
@@ -1170,6 +1182,22 @@ mod tests {
     }
 
     #[test]
+    fn ant_message_rejects_invalid_tool_call_arguments() {
+        for arguments in ["not json", "[]"] {
+            let msg = Message {
+                role: MessageRole::Assistant,
+                content: vec![MessagePart::ToolCall(ToolCallPart {
+                    id: "call_1".to_string(),
+                    name: "tool".to_string(),
+                    arguments: arguments.to_string(),
+                })],
+            };
+
+            assert!(AntMessage::try_from(msg).is_err());
+        }
+    }
+
+    #[test]
     fn ant_message_part_roundtrip_text() {
         let _original = MessagePart::Text(TextPart {
             text: "roundtrip".to_string(),
@@ -1245,6 +1273,37 @@ mod tests {
         let ant_req = AntRequest::try_from(request).unwrap();
         assert_eq!(ant_req.system, Some("system prompt".to_string()));
         assert_eq!(ant_req.messages.len(), 1);
+    }
+
+    #[test]
+    fn ant_request_preserves_all_system_messages() {
+        let request = LLMRequest {
+            api_type: ApiType::Anthropic,
+            base_url: Some("https://api.anthropic.com/v1".to_string()),
+            api_key: "key".to_string(),
+            model: "claude".to_string(),
+            messages: vec![
+                text_message(MessageRole::System, "First instruction."),
+                text_message(MessageRole::System, "Second instruction."),
+                text_message(MessageRole::User, "hi"),
+            ],
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+
+        let ant_req = AntRequest::try_from(request).unwrap();
+        assert_eq!(
+            ant_req.system,
+            Some("First instruction.\nSecond instruction.".to_string())
+        );
     }
 
     #[test]
