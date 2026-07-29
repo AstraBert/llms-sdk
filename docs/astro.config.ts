@@ -8,7 +8,7 @@ const nimbusConfig = defineNimbusConfig({
   // CHANGE_ME: your site's canonical origin (no trailing slash). Drives
   // canonical URLs, absolute OG image URLs, robots.txt, sitemap, and the
   // links in /llms.txt — leaving the placeholder breaks all of them.
-  site: "https://llms-sdk.org",
+  site: "https://llms-sdk.cc",
   // CHANGE_ME: your project's name — used for <title>, the home H1, and OG.
   title: "llms-sdk",
   // CHANGE_ME: a one-line description of your docs — used for meta + OG.
