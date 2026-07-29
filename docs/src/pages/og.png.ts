@@ -10,7 +10,7 @@ export async function GET() {
     description: config.description,
     ...ogCardConfig,
     logo: {
-      path: "/dark-no-bg.png",
+      path: "public/dark-no-bg.png",
       size: [200, 200]
     }
   });
