@@ -421,6 +421,15 @@ impl Display for ApiType {
     }
 }
 
+impl ApiType {
+    fn default_base_url(self) -> &'static str {
+        match self {
+            Self::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
+            Self::OpenAI => DEFAULT_OPENAI_BASE_URL,
+        }
+    }
+}
+
 /// Amount of reasoning effort requested from the model.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -730,10 +739,7 @@ impl LLMRequestBuilder {
         if let Some(url) = &self.base_url {
             url.to_owned()
         } else {
-            match self.api_type {
-                ApiType::Anthropic => DEFAULT_ANTHROPIC_BASE_URL.to_owned(),
-                ApiType::OpenAI => DEFAULT_OPENAI_BASE_URL.to_owned(),
-            }
+            self.api_type.default_base_url().to_owned()
         }
     }
 
@@ -760,6 +766,12 @@ impl LLMRequestBuilder {
 }
 
 impl LLMRequest {
+    pub(crate) fn base_url_or_default(&self) -> String {
+        self.base_url
+            .clone()
+            .unwrap_or_else(|| self.api_type.default_base_url().to_owned())
+    }
+
     pub fn builder() -> LLMRequestBuilder {
         LLMRequestBuilder::new()
     }
@@ -931,6 +943,31 @@ mod tests {
     #[test]
     fn is_valid_json_rejects_incomplete_object() {
         assert!(!is_valid_json(r#"{"key": "value""#));
+    }
+
+    #[test]
+    fn request_without_base_url_uses_the_provider_default() {
+        let mut request = LLMRequest {
+            api_type: ApiType::OpenAI,
+            base_url: None,
+            api_key: "key".to_string(),
+            model: "model".to_string(),
+            messages: vec![],
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: false,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+
+        assert_eq!(request.base_url_or_default(), DEFAULT_OPENAI_BASE_URL);
+        request.api_type = ApiType::Anthropic;
+        assert_eq!(request.base_url_or_default(), DEFAULT_ANTHROPIC_BASE_URL);
     }
 
     #[test]

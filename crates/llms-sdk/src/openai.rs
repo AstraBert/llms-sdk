@@ -801,7 +801,7 @@ impl OpenAIClient {
         &self,
         request: LLMRequest,
     ) -> Result<LLMResponse, Box<dyn std::error::Error>> {
-        let base_url = request.base_url.clone().unwrap();
+        let base_url = request.base_url_or_default();
         let api_key = request.api_key.clone();
         if request.stream {
             return Err(StreamParamError {
@@ -847,7 +847,7 @@ impl OpenAIClient {
         &self,
         request: LLMRequest,
     ) -> Result<LLMStream, Box<dyn std::error::Error + Send + Sync>> {
-        let base_url = request.base_url.clone().unwrap();
+        let base_url = request.base_url_or_default();
         let api_key = request.api_key.clone();
         if !request.stream {
             return Err(StreamParamError {
@@ -903,6 +903,10 @@ impl OpenAIClient {
                 match ev {
                     Ok(event) => {
                         if event.data == "[DONE]" {
+                            let Some(response_id) = response_id.clone() else {
+                                yield Err("OpenAI stream ended without a response ID".into());
+                                return;
+                            };
                             let mut tool_calls = None;
                             if !indexed_tool_calls.is_empty() {
                                 for (_, tc) in indexed_tool_calls.clone() {
@@ -913,7 +917,8 @@ impl OpenAIClient {
                                 }
                             }
                             let message = deltas_to_message(&deltas, tool_calls.as_deref());
-                            yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id.clone().unwrap(), deltas: deltas.clone(), created_at: first_created, usage: resp_usage.clone(), message, tool_calls, thinking_deltas: None }))
+                            yield Ok(LLMStreamingResponse::Complete(LLMStreamingComplete { id: response_id, deltas: deltas.clone(), created_at: first_created, usage: resp_usage.clone(), message, tool_calls, thinking_deltas: None }));
+                            return;
                         } else {
                             let json_result: Result<OpenAIStreamingMessage, serde_json::Error> = serde_json::from_str(&event.data);
                             match json_result {
@@ -956,6 +961,7 @@ impl OpenAIClient {
                     }
                 }
             }
+            yield Err("OpenAI stream ended before [DONE]".into());
         });
 
         Ok(s)
@@ -966,6 +972,12 @@ impl OpenAIClient {
 mod tests {
     use super::*;
     use crate::ThinkingPart;
+    use futures_util::StreamExt;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
 
     fn text_message(role: MessageRole, text: &str) -> Message {
         Message {
@@ -1409,5 +1421,57 @@ mod tests {
                 _ => panic!("There should not be any parts apart from tool calls and texts"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn openai_stream_errors_when_connection_closes_before_done() {
+        crate::install_crypto_provider();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = concat!(
+            "data: {\"id\":\"stream_1\",\"created\":1,\"choices\":[{\"index\":0,",
+            "\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}],\"usage\":null}\n\n"
+        );
+        let server = thread::spawn(move || {
+            let (mut connection, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            connection.read(&mut request).unwrap();
+            write!(
+                connection,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let request = LLMRequest {
+            api_type: ApiType::OpenAI,
+            base_url: Some(format!("http://{address}")),
+            api_key: "key".to_string(),
+            model: "gpt-4".to_string(),
+            messages: vec![text_message(MessageRole::User, "hi")],
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            reasoning_effort: None,
+            prompt_cache_ttl: None,
+            stream: true,
+            output_format: None,
+            tools: None,
+            tool_choice: None,
+            parallel_tool_calls: false,
+        };
+
+        let mut stream = OpenAIClient::new(RetryPolicy::default())
+            .stream_response(request)
+            .await
+            .unwrap();
+        assert!(matches!(
+            stream.next().await,
+            Some(Ok(LLMStreamingResponse::Delta(_)))
+        ));
+        assert!(stream.next().await.unwrap().is_err());
+        server.join().unwrap();
     }
 }
