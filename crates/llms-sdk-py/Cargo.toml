@@ -1,6 +1,6 @@
 [package]
 name = "llms-sdk-py"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
@@ -19,7 +19,7 @@ base64 = "0.22.1"
 pyo3 = { version = "0.28.3", features = ["either", "experimental-async"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-llms-sdk = { path = "../llms-sdk", version = "0.2.0" }
+llms-sdk = { path = "../llms-sdk", version = "0.3.0" }
 pythonize = "0.28"
 schemars = "1.2.1"
 serde_json = "1.0.150"
