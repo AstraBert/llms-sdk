@@ -638,7 +638,7 @@ impl LLMRequestBuilder {
         self
     }
 
-    #[must_use]
+    #[must_use = "Must specify a model in order to use the LLM API"]
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
@@ -664,6 +664,7 @@ impl LLMRequestBuilder {
         self
     }
 
+    #[must_use = "Must specify messages before sending a request"]
     pub fn messages(mut self, messages: Vec<Message>) -> Self {
         self.messages = messages;
         self
