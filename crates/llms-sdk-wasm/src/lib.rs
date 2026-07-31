@@ -12,6 +12,11 @@ pub use types::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+#[wasm_bindgen(start)]
+pub fn __wasm_start() {
+    console_error_panic_hook::set_once();
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct RetryPolicy {
