@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM SDK WASM Demo</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-2: #818cf8;
+      --danger: #f87171;
+      --success: #34d399;
+      --border: #334155;
+      --radius: 12px;
+      --shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: radial-gradient(1200px 800px at 10% -10%, #1e1b4b 0%, transparent 60%),
+                  radial-gradient(1000px 700px at 120% 10%, #312e81 0%, transparent 60%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 720px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 28px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      letter-spacing: 0.2px;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 18px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    @media (max-width: 560px) {
+      .row { grid-template-columns: 1fr; }
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    select,
+    textarea {
+      width: 100%;
+      background: #0b1220;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(56,189,248,0.15);
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      line-height: 1.45;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 14px 0 18px;
+      padding: 10px 12px;
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: #334155;
+      border-radius: 24px;
+      transition: .25s;
+    }
+    .slider::before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: .25s;
+    }
+    input:checked + .slider { background: var(--accent); }
+    input:checked + .slider::before { transform: translateX(20px); }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform .08s, opacity .2s;
+    }
+    button:active { transform: translateY(1px); }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #0b1220;
+    }
+    .btn-secondary {
+      background: #0b1220;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .output {
+      margin-top: 18px;
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      min-height: 120px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    .output:empty::before {
+      content: "Response will appear here…";
+      color: var(--muted);
+    }
+
+    .meta {
+      margin-top: 10px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .meta span { background: #0b1220; border: 1px solid var(--border); padding: 4px 8px; border-radius: 999px; }
+
+    .error { color: var(--danger); }
+    .streaming-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--success); margin-right: 8px; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(56,189,248,0.12);
+      color: var(--accent);
+      border: 1px solid rgba(56,189,248,0.25);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>LLM SDK WASM Demo</h1>
+    <div class="subtitle">Chat with <code>chat</code> or <code>streamChat</code> via the WASM package.</div>
+
+    <div class="row">
+      <div>
+        <label for="apiType">API Type</label>
+        <select id="apiType">
+          <option value="openai" selected>OpenAI</option>
+          <option value="anthropic">Anthropic</option>
+        </select>
+      </div>
+      <div>
+        <label for="model">Model</label>
+        <input type="text" id="model" value="gpt-4o-mini" placeholder="e.g. gpt-4o-mini or claude-3-5-sonnet-20241022" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div style="grid-column: 1 / -1;">
+        <label for="apiKey">API Key</label>
+        <input type="password" id="apiKey" placeholder="sk-… or sk-ant-…" />
+      </div>
+    </div>
+
+    <div>
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" placeholder="Enter your message here…">Explain quantum computing in one sentence.</textarea>
+    </div>
+
+    <div class="toggle-row">
+      <div class="toggle-label">
+        <span class="badge" id="modeBadge">Non-streaming</span>
+        <span>Streaming</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="streamToggle" />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" id="sendBtn">Send</button>
+      <button class="btn-secondary" id="clearBtn">Clear</button>
+    </div>
+
+    <div class="output" id="output" aria-live="polite"></div>
+    <div class="meta" id="meta"></div>
+  </div>
+
+  <script type="module">
+    import init, { chat, streamChat } from "./pkg/llms_sdk_wasm.js";
+
+    await init();
+
+    const $ = (id) => document.getElementById(id);
+    const apiTypeEl = $("apiType");
+    const modelEl = $("model");
+    const apiKeyEl = $("apiKey");
+    const promptEl = $("prompt");
+    const streamToggleEl = $("streamToggle");
+    const modeBadgeEl = $("modeBadge");
+    const sendBtn = $("sendBtn");
+    const clearBtn = $("clearBtn");
+    const outputEl = $("output");
+    const metaEl = $("meta");
+
+    function setModeBadge() {
+      if (streamToggleEl.checked) {
+        modeBadgeEl.textContent = "Streaming";
+        modeBadgeEl.style.color = "var(--success)";
+        modeBadgeEl.style.background = "rgba(52,211,153,0.12)";
+        modeBadgeEl.style.borderColor = "rgba(52,211,153,0.25)";
+      } else {
+        modeBadgeEl.textContent = "Non-streaming";
+        modeBadgeEl.style.color = "var(--accent)";
+        modeBadgeEl.style.background = "rgba(56,189,248,0.12)";
+        modeBadgeEl.style.borderColor = "rgba(56,189,248,0.25)";
+      }
+    }
+    streamToggleEl.addEventListener("change", setModeBadge);
+    setModeBadge();
+
+    function setOutput(html) {
+      outputEl.innerHTML = html;
+    }
+    function appendOutput(html) {
+      outputEl.insertAdjacentHTML("beforeend", html);
+    }
+    function setMeta(html) {
+      metaEl.innerHTML = html;
+    }
+
+    clearBtn.addEventListener("click", () => {
+      outputEl.textContent = "";
+      metaEl.innerHTML = "";
+    });
+
+    sendBtn.addEventListener("click", async () => {
+      const apiType = apiTypeEl.value; // "openai" | "anthropic"
+      const model = modelEl.value.trim();
+      const apiKey = apiKeyEl.value.trim();
+      const prompt = promptEl.value.trim();
+      const stream = streamToggleEl.checked;
+
+      if (!apiKey) { setOutput("<span class='error'>Please enter an API key.</span>"); return; }
+      if (!model) { setOutput("<span class='error'>Please enter a model.</span>"); return; }
+      if (!prompt) { setOutput("<span class='error'>Please enter a prompt.</span>"); return; }
+
+      sendBtn.disabled = true;
+      setOutput("");
+      setMeta("");
+
+      const request = {
+        api_type: apiType,
+        api_key: apiKey,
+        model,
+        messages: [
+          { role: "user", content: [{ type: "text", text: prompt }] }
+        ],
+        stream,
+        parallel_tool_calls: false,
+      };
+
+      const start = performance.now();
+
+      try {
+        if (stream) {
+          setOutput('<span class="streaming-dot"></span><em>Streaming…</em>');
+          let text = "";
+          let usage = null;
+
+          await streamChat(request, (chunk) => {
+            // chunk is an LLMResponse-like object per stream event
+            if (chunk && chunk.message && Array.isArray(chunk.message.content)) {
+              for (const part of chunk.message.content) {
+                if (part.type === "text" && part.text) {
+                  text += part.text;
+                }
+              }
+            }
+            if (chunk && chunk.usage) {
+              usage = chunk.usage;
+            }
+            const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+            setOutput(escapeHtml(text) || "<em>Receiving…</em>");
+            setMeta(`<span>⏱ ${elapsed}s</span>`);
+          });
+
+          const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+          setOutput(escapeHtml(text));
+          setMeta(buildMeta({ usage, elapsed }));
+        } else {
+          setOutput("<em>Loading…</em>");
+          const response = await chat(request);
+          const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+
+          let text = "";
+          if (response && response.message && Array.isArray(response.message.content)) {
+            for (const part of response.message.content) {
+              if (part.type === "text" && part.text) {
+                text += part.text;
+              }
+            }
+          }
+          setOutput(escapeHtml(text));
+          setMeta(buildMeta({ usage: response?.usage, elapsed, id: response?.id }));
+        }
+      } catch (err) {
+        setOutput(`<span class="error">Error: ${escapeHtml(String(err.message ?? err))}</span>`);
+        setMeta("");
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+
+    function escapeHtml(str) {
+      if (str == null) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function buildMeta({ usage, elapsed, id }) {
+      const parts = [];
+      if (elapsed != null) parts.push(`<span>⏱ ${elapsed}s</span>`);
+      if (usage) {
+        const input = usage.input_tokens ?? "?";
+        const output = usage.output_tokens ?? "?";
+        parts.push(`<span>Tokens: ${input} in / ${output} out</span>`);
+      }
+      if (id) parts.push(`<span>ID: ${escapeHtml(id)}</span>`);
+      return parts.join("");
+    }
+  </script>
+</body>
+</html>
