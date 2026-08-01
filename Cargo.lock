@@ -932,6 +932,7 @@ name = "llms-sdk-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "futures",
  "futures-util",
  "js-sys",
  "llms-sdk",

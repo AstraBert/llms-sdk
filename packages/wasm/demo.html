@@ -244,7 +244,7 @@
       </div>
       <div>
         <label for="model">Model</label>
-        <input type="text" id="model" value="gpt-4o-mini" placeholder="e.g. gpt-4o-mini or claude-3-5-sonnet-20241022" />
+        <input type="text" id="model" value="gpt-5.4-mini" placeholder="e.g. gpt-5.4-mini or claude-5-sonnet" />
       </div>
     </div>
 
@@ -362,7 +362,11 @@
           let text = "";
           let usage = null;
 
-          await streamChat(request, (chunk) => {
+          await streamChat(request, (err, chunk) => {
+            if (err) {
+              console.error("stream error:", err);
+              return;
+            }
             // chunk is an LLMResponse-like object per stream event
             if (chunk && chunk.message && Array.isArray(chunk.message.content)) {
               for (const part of chunk.message.content) {
