@@ -1,0 +1,44 @@
+{
+  "name": "@cle-does-things/llms-sdk-wasm",
+  "version": "0.1.0",
+  "description": "Unified interface to call OpenAI and Anthropic-compatible LLM APIs from your browser",
+  "type": "module",
+  "main": "./pkg/llms_sdk_wasm.js",
+  "types": "./pkg/llms_sdk_wasm.d.ts",
+  "exports": {
+    ".": {
+      "types": "./pkg/llms_sdk_wasm.d.ts",
+      "import": "./pkg/llms_sdk_wasm.js"
+    },
+    "./llms_sdk_wasm_bg.wasm": "./pkg/llms_sdk_wasm_bg.wasm",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "pkg",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "scripts": {
+    "build": "wasm-pack build ../../crates/llms-sdk-wasm --release --target web --out-dir ../../packages/wasm/pkg --out-name llms_sdk_wasm",
+    "build:bundler": "wasm-pack build ../../crates/llms-sdk-wasm --release --target bundler --out-dir ../../packages/wasm/pkg --out-name llms_sdk_wasm",
+    "build:nodejs": "wasm-pack build ../../crates/llms-sdk-wasm --release --target nodejs --out-dir ../../packages/wasm/pkg --out-name llms_sdk_wasm",
+    "clean": "rm -rf pkg"
+  },
+  "keywords": [
+    "llms",
+    "sdk",
+    "ai",
+    "openai",
+    "anthropic",
+    "rust"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AstraBert/llms-sdk.git"
+  },
+  "author": "Clelia Astra Bertelli",
+  "license": "MIT"
+}

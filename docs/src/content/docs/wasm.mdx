@@ -1,0 +1,216 @@
+---
+title: WASM Bindings
+description: Using llms-sdk from the browser via WebAssembly.
+sidebar:
+  order: 5
+  label: WASM Bindings
+---
+
+<Aside type="note">
+    As opposed to the Rust, TS and Python SDKs, WASM bindings do not support built-in retries. 
+</Aside>
+
+WASM bindings for `llms-sdk`, built with `wasm-bindgen`. Run OpenAI- and Anthropic-compatible chat completions directly in the browser.
+
+## Installation
+
+```bash
+npm install @cle-does-things/llms-sdk-wasm
+```
+
+The package includes the compiled `.wasm` module and JS glue. Use it with any bundler that supports WASM (Vite, Webpack, Rollup, etc.) or load it directly in the browser.
+
+## Quick start
+
+Import `init` first to load and instantiate the WASM module, then call `chat`:
+
+```javascript
+import init, { chat } from "@cle-does-things/llms-sdk-wasm";
+
+await init();
+
+const response = await chat({
+  api_type: "openai",
+  api_key: "sk-...",
+  model: "gpt-5.4-mini",
+  messages: [
+    { role: "user", content: [{ type: "text", text: "Hello!" }] }
+  ],
+  stream: false,
+  parallel_tool_calls: false,
+});
+
+console.log(response.message.content);
+```
+
+## Streaming
+
+Use `streamChat` with a callback to receive deltas as they arrive:
+
+```javascript
+import init, { streamChat } from "@cle-does-things/llms-sdk-wasm";
+
+await init();
+
+const request = {
+  api_type: "openai",
+  api_key: "sk-...",
+  model: "gpt-5.4-mini",
+  messages: [
+    { role: "user", content: [{ type: "text", text: "Count to 5" }] }
+  ],
+  stream: true,
+  parallel_tool_calls: false,
+};
+
+await streamChat(request, (err, chunk) => {
+  if (err) {
+    console.error("Stream error:", err);
+    return;
+  }
+
+  switch (chunk.type) {
+    case "delta":
+      console.log("Text:", chunk.delta);
+      console.log("Done?", chunk.stop);
+      break;
+    case "thinkingDelta":
+      console.log("Reasoning:", chunk.delta);
+      break;
+    case "toolDelta":
+      console.log("Tool call:", chunk.name, chunk.partial_arguments);
+      break;
+    case "complete":
+      console.log("Final message:", chunk.message);
+      console.log("Usage:", chunk.usage);
+      break;
+  }
+});
+```
+
+## Multimodal input
+
+### Image
+
+```javascript
+import { imagePart } from "@cle-does-things/llms-sdk-wasm";
+
+const message = {
+  role: "user",
+  content: [
+    { type: "text", text: "Describe this image." },
+    imagePart("https://example.com/image.png"),     // URL
+    // or
+    imagePart({ bytes: new Uint8Array([...]) }),    // raw bytes
+  ],
+};
+```
+
+### Document (Anthropic only)
+
+```javascript
+import { documentPart } from "@cle-does-things/llms-sdk-wasm";
+
+const message = {
+  role: "user",
+  content: [
+    { type: "text", text: "Summarize this document." },
+    documentPart("https://example.com/doc.pdf"),    // URL
+    // or
+    documentPart({ bytes: new Uint8Array([...]) }), // raw bytes
+  ],
+};
+```
+
+### Audio (OpenAI only)
+
+```javascript
+import { audioPart } from "@cle-does-things/llms-sdk-wasm";
+
+const message = {
+  role: "user",
+  content: [
+    { type: "text", text: "Transcribe this audio." },
+    audioPart({ bytes: new Uint8Array([...]) }),    // raw bytes only
+  ],
+};
+```
+
+## Structured output
+
+Pass an `output_format` with a JSON Schema to enforce structured responses:
+
+```javascript
+const request = {
+  api_type: "openai",
+  api_key: "sk-...",
+  model: "gpt-5.4-mini",
+  messages: [
+    { role: "user", content: [{ type: "text", text: "France" }] }
+  ],
+  stream: false,
+  parallel_tool_calls: false,
+  output_format: {
+    name: "capital",
+    description: "Country capital",
+    schema: {
+      type: "object",
+      properties: {
+        country: { type: "string" },
+        capital: { type: "string" },
+      },
+      required: ["country", "capital"],
+    },
+  },
+};
+```
+
+## Tool use
+
+```javascript
+const request = {
+  api_type: "openai",
+  api_key: "sk-...",
+  model: "gpt-5.4-mini",
+  messages: [
+    { role: "user", content: [{ type: "text", text: "What's the weather in Paris?" }] }
+  ],
+  stream: false,
+  parallel_tool_calls: false,
+  tools: [
+    {
+      name: "get_weather",
+      description: "Return weather for a city.",
+      parameters: {
+        type: "object",
+        properties: {
+          city: { type: "string" },
+        },
+        required: ["city"],
+      },
+    },
+  ],
+  tool_choice: "auto",
+};
+```
+
+
+## Request schema
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `api_type` | `"openai" \| "anthropic"` | ✅ | Provider type |
+| `base_url` | `string` | | Override the default API base URL |
+| `api_key` | `string` | ✅ | API key |
+| `model` | `string` | ✅ | Model identifier |
+| `messages` | `Message[]` | ✅ | Conversation history |
+| `max_output_tokens` | `number` | | Maximum tokens to generate |
+| `temperature` | `number` | | Sampling temperature |
+| `top_p` | `number` | | Nucleus sampling |
+| `reasoning_effort` | `ReasoningEffort` | | Control reasoning depth (`none` … `maximum`) |
+| `prompt_cache_ttl` | `string` | | Prompt cache TTL hint |
+| `stream` | `boolean` | ✅ | Enable streaming |
+| `output_format` | `OutputFormat` | | Structured output JSON schema |
+| `tools` | `Tool[]` | | Available function tools |
+| `tool_choice` | `ToolChoice` | | Tool selection mode (`auto`, `none`, `required`) |
+| `parallel_tool_calls` | `boolean` | ✅ | Allow parallel tool calls |

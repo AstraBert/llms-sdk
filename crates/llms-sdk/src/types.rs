@@ -4,10 +4,13 @@ use reqwest_retry::Jitter;
 use schemars::{JsonSchema, Schema, schema_for, schema_for_value};
 use std::collections::HashMap;
 #[cfg(feature = "fs")]
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 #[cfg(feature = "fs")]
+#[cfg(not(target_arch = "wasm32"))]
 use std::io;
 #[cfg(feature = "fs")]
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 use std::{
     fmt::{Debug, Display},
@@ -159,6 +162,7 @@ impl ImagePart {
 
     /// Reads an image file from disk and encodes it as a base64 image part.
     #[cfg(feature = "fs")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn try_from_file(file: String) -> Result<Self, io::Error> {
         let content = fs::read(file)?;
         let kind = file_format::FileFormat::from_bytes(&content);
@@ -240,6 +244,7 @@ impl AudioPart {
 
     /// Reads an audio file from disk and encodes it as a base64 audio part.
     #[cfg(feature = "fs")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn try_from_file(file: impl Into<PathBuf>) -> Result<Self, io::Error> {
         let content = fs::read(file.into())?;
         let kind = file_format::FileFormat::from_bytes(&content);
@@ -313,6 +318,7 @@ impl DocumentPart {
 
     /// Reads a plain text file from disk as a document part.
     #[cfg(feature = "fs")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn try_from_text_file(file: String) -> Result<Self, io::Error> {
         let content = fs::read_to_string(file)?;
         Ok(Self {
@@ -324,6 +330,7 @@ impl DocumentPart {
 
     /// Reads a PDF file from disk and encodes it as a base64 document part.
     #[cfg(feature = "fs")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn try_from_pdf_file(file: String) -> Result<Self, io::Error> {
         let data = fs::read(file)?;
         let kind = file_format::FileFormat::from_bytes(&data);
@@ -921,7 +928,11 @@ pub enum LLMStreamingResponse {
 }
 
 pub type LLMStreamItem = Result<LLMStreamingResponse, Box<dyn std::error::Error + Send + Sync>>;
+#[cfg(not(target_arch = "wasm32"))]
 pub type LLMStream = Pin<Box<dyn Stream<Item = LLMStreamItem> + Send>>;
+
+#[cfg(target_arch = "wasm32")]
+pub type LLMStream = Pin<Box<dyn Stream<Item = LLMStreamItem>>>;
 
 /// Checks whether a string is valid JSON.
 ///

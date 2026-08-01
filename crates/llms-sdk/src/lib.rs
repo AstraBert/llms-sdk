@@ -10,14 +10,21 @@ mod types;
 
 pub use types::*;
 
+#[cfg(not(target_arch = "wasm32"))]
 use rustls::crypto::ring::default_provider;
 
 /// Installs the `ring` crypto provider for `rustls`.
 ///
 /// This should be called once before making any HTTPS requests.
 /// It is safe to call multiple times (subsequent calls are no-ops).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn install_crypto_provider() {
     let _ = default_provider().install_default();
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn install_crypto_provider() {
+    // no-op
 }
 
 use crate::{anthropic::AntClient, openai::OpenAIClient};

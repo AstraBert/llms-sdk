@@ -3,7 +3,9 @@ use std::{collections::BTreeMap, fmt::Display, str::FromStr};
 
 use async_stream::stream;
 use eventsource_stream::Eventsource;
+#[cfg(not(target_arch = "wasm32"))]
 use reqwest_middleware::ClientBuilder;
+#[cfg(not(target_arch = "wasm32"))]
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
@@ -867,17 +869,22 @@ impl AntClient {
             .into());
         }
         let req = AntRequest::try_from(request)?;
-        let retry = ExponentialBackoff::builder()
-            .base(self.retry_policy.base)
-            .jitter(self.retry_policy.jitter)
-            .retry_bounds(
-                self.retry_policy.min_retry_interval,
-                self.retry_policy.max_retry_interval,
-            )
-            .build_with_max_retries(self.retry_policy.max_retries);
-        let client = ClientBuilder::new(reqwest::Client::new())
-            .with(RetryTransientMiddleware::new_with_policy(retry))
-            .build();
+        #[cfg(not(target_arch = "wasm32"))]
+        let client = {
+            let retry = ExponentialBackoff::builder()
+                .base(self.retry_policy.base)
+                .jitter(self.retry_policy.jitter)
+                .retry_bounds(
+                    self.retry_policy.min_retry_interval,
+                    self.retry_policy.max_retry_interval,
+                )
+                .build_with_max_retries(self.retry_policy.max_retries);
+            ClientBuilder::new(reqwest::Client::new())
+                .with(RetryTransientMiddleware::new_with_policy(retry))
+                .build()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let client = reqwest::Client::new();
         let body = serde_json::to_string(&req)?;
         let response = client
             .post(format!("{}{}", base_url, MESSAGES_ENDPOINT))
@@ -914,17 +921,22 @@ impl AntClient {
             .into());
         }
         let req = AntRequest::try_from(request)?;
-        let retry = ExponentialBackoff::builder()
-            .base(self.retry_policy.base)
-            .jitter(self.retry_policy.jitter)
-            .retry_bounds(
-                self.retry_policy.min_retry_interval,
-                self.retry_policy.max_retry_interval,
-            )
-            .build_with_max_retries(self.retry_policy.max_retries);
-        let client = ClientBuilder::new(reqwest::Client::new())
-            .with(RetryTransientMiddleware::new_with_policy(retry))
-            .build();
+        #[cfg(not(target_arch = "wasm32"))]
+        let client = {
+            let retry = ExponentialBackoff::builder()
+                .base(self.retry_policy.base)
+                .jitter(self.retry_policy.jitter)
+                .retry_bounds(
+                    self.retry_policy.min_retry_interval,
+                    self.retry_policy.max_retry_interval,
+                )
+                .build_with_max_retries(self.retry_policy.max_retries);
+            ClientBuilder::new(reqwest::Client::new())
+                .with(RetryTransientMiddleware::new_with_policy(retry))
+                .build()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let client = reqwest::Client::new();
         let body = serde_json::to_string(&req)?;
 
         let mut deltas: Vec<LLMStreamingDelta> = vec![];

@@ -1,0 +1,100 @@
+name: CI - WASM Bindings
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "wasm@**"
+    paths:
+      - "crates/**"
+      - "packages/wasm/**"
+      - ".github/workflows/ci-wasm.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "packages/wasm/**"
+      - ".github/workflows/ci-wasm.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build WASM
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cache/pdfium-rs
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Build WASM package
+        working-directory: packages/wasm
+        run: npm run build
+
+      - name: Verify output
+        run: |
+          test -f packages/wasm/pkg/llms_sdk_wasm_bg.wasm
+          test -f packages/wasm/pkg/llms_sdk_wasm.js
+          test -f packages/wasm/pkg/llms_sdk_wasm.d.ts
+          WASM_SIZE=$(stat --format=%s packages/wasm/pkg/llms_sdk_wasm_bg.wasm)
+          echo "WASM binary size: $(numfmt --to=iec $WASM_SIZE)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pkg
+          path: packages/wasm/pkg/
+          if-no-files-found: error
+
+  publish:
+    name: Publish - WASM Bindings
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    needs:
+      - build
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm ci
+        working-directory: packages/wasm
+      - name: Download WASM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg
+          path: packages/wasm/pkg/
+      - name: Publish
+        run: |
+          npm config set provenance true
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+          npm publish --access public
+        working-directory: packages/wasm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
