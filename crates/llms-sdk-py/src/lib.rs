@@ -30,6 +30,7 @@ mod llms_sdk_py {
     use llms_sdk::LLMThinkingDelta;
     use llms_sdk::LLMToolDelta;
     use pyo3::exceptions::PyStopAsyncIteration;
+    use pyo3::types::PyType;
     use pyo3_async_runtimes::tokio::future_into_py;
     use pyo3_stub_gen::derive::*;
     use std::collections::HashMap;
@@ -59,7 +60,6 @@ mod llms_sdk_py {
     };
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::types::PyList;
-    use pyo3::types::PyType;
     use pyo3::{
         exceptions::{PyAttributeError, PyKeyError, PyValueError},
         prelude::*,
@@ -1311,6 +1311,57 @@ mod llms_sdk_py {
         fn new(role: String, content: Vec<MessagePart>) -> PyResult<Self> {
             let rl = MessageRole::new(role)?;
             Ok(Self { role: rl, content })
+        }
+
+        /// Build a user Message from a prompt.
+        ///
+        /// Args:
+        ///     prompt (str): Prompt for the message
+        /// Returns:
+        ///     Message: the built user-message, with the specified prompt
+        #[classmethod]
+        fn from_prompt(_cls: &Bound<'_, PyType>, prompt: String) -> Self {
+            Self {
+                role: MessageRole::User,
+                content: vec![text_part(prompt)],
+            }
+        }
+
+        /// Build a system Message from a prompt.
+        ///
+        /// Args:
+        ///     system (str): System prompt for the message
+        /// Returns:
+        ///     Message: the built system message, with the specified system prompt
+        #[classmethod]
+        fn from_system(_cls: &Bound<'_, PyType>, system: String) -> Self {
+            Self {
+                role: MessageRole::System,
+                content: vec![text_part(system)],
+            }
+        }
+
+        /// Build a Message from text content, with an optional role (defaults to user)
+        ///
+        /// Args:
+        ///     content (str): Text content for the message
+        ///     role (str | None): Role for the message
+        /// Returns:
+        ///     Message: the built system message, with the specified system prompt
+        #[classmethod]
+        fn from_string(
+            _cls: &Bound<'_, PyType>,
+            content: String,
+            role: Option<String>,
+        ) -> PyResult<Self> {
+            let message_role = match role {
+                Some(v) => MessageRole::new(v)?,
+                None => MessageRole::User,
+            };
+            Ok(Self {
+                role: message_role,
+                content: vec![text_part(content)],
+            })
         }
 
         /// The role of this message.

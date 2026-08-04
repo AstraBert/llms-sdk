@@ -183,6 +183,15 @@ pub struct Message {
     content: Vec<MessagePart>,
 }
 
+/// Build a text message, with an optional role (defaults to user if left undefined).
+#[wasm_bindgen(js_name = textMessage)]
+pub fn text_message(content: String, role: Option<MessageRole>) -> Message {
+    Message {
+        role: role.unwrap_or(MessageRole::User),
+        content: vec![MessagePart::Text(TextPart { text: content })],
+    }
+}
+
 impl From<MessagePart> for NativeMessagePart {
     fn from(value: MessagePart) -> Self {
         match value {
