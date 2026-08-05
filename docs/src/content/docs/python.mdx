@@ -28,7 +28,7 @@ async def main():
         model="gpt-5.4-mini",
         api_key="sk-...",
         messages=[
-            llm.Message("user", [llm.TextPart("Hello, world!")])
+            llm.Message.from_prompt("Hello!")
         ],
         stream=False,
     )
@@ -54,7 +54,7 @@ async def main():
     request = llm.LLMRequest(
         model="gpt-5.4-mini",
         api_key="sk-...",
-        messages=[llm.Message("user", [llm.TextPart("Count to 5")])],
+        messages=[llm.Message.from_prompt("Count to 5")],
         stream=True,
     )
 

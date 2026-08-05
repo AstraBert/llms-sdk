@@ -21,7 +21,7 @@ If your platform is not covered, the package will attempt to build from source (
 ## Quick start
 
 ```typescript
-import { Llm, ApiType, MessageRole } from '@cle-does-things/llms-sdk'
+import { Llm, ApiType, textMessage } from '@cle-does-things/llms-sdk'
 
 async function main() {
   const request = {
@@ -29,10 +29,7 @@ async function main() {
     apiKey: process.env.OPENAI_API_KEY!,
     model: 'gpt-5.4-mini',
     messages: [
-      {
-        role: MessageRole.User,
-        content: [{ text: 'Hello!', type: 'text' }],
-      },
+      textMessage("Hello!"),
     ],
     maxOutputTokens: 256,
     temperature: 0.7,
