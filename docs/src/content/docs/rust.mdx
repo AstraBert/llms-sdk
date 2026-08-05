@@ -14,14 +14,14 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-llms-sdk = "0.2"
+llms-sdk = "*"
 ```
 
 Enable optional features as needed:
 
 ```toml
 [dependencies]
-llms-sdk = { version = "0.2", features = ["cli"] }
+llms-sdk = { version = "*", features = ["cli"] }
 ```
 
 ## Quick start
@@ -36,10 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_url: None,
         api_key: std::env::var("OPENAI_API_KEY")?,
         model: "gpt-5.4-mini".to_string(),
-        messages: vec![Message {
-            role: MessageRole::User,
-            content: vec![MessagePart::Text(TextPart::new("Hello!"))],
-        }],
+        messages: vec![Message::from_prompt("Hello!")],
         max_output_tokens: Some(256),
         temperature: Some(0.7),
         top_p: None,
@@ -70,10 +67,7 @@ let request = LLMRequest::builder()
     .api_type(ApiType::Anthropic)
     .api_key(std::env::var("ANTHROPIC_API_KEY").unwrap())
     .model("claude-5-sonnet".to_string())
-    .messages(vec![Message {
-        role: MessageRole::User,
-        content: vec![MessagePart::Text(TextPart::new("Hi!"))],
-    }])
+    .messages(vec![Message::from_prompt("Hi!")])
     .max_output_tokens(256)
     .build();
 ```
@@ -146,6 +140,14 @@ let request = LLMRequest {
     }),
     ..request
 };
+```
+
+If you want to validate the response directly against the `struct` for which the schema was generated,
+use the `.parse(` method:
+
+```rust
+let response = llm.respond(request).await?;
+let validated: Capital = response.message.parse()?;
 ```
 
 ## Tool use

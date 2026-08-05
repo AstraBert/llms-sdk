@@ -1,6 +1,6 @@
 {
   "name": "@cle-does-things/llms-sdk-wasm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unified interface to call OpenAI and Anthropic-compatible LLM APIs from your browser",
   "type": "module",
   "main": "./pkg/llms_sdk_wasm.js",

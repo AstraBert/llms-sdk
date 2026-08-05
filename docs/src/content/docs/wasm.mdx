@@ -34,7 +34,7 @@ const response = await chat({
   api_key: "sk-...",
   model: "gpt-5.4-mini",
   messages: [
-    { role: "user", content: [{ type: "text", text: "Hello!" }] }
+    textmessage("Hello!")
   ],
   stream: false,
   parallel_tool_calls: false,
@@ -57,7 +57,7 @@ const request = {
   api_key: "sk-...",
   model: "gpt-5.4-mini",
   messages: [
-    { role: "user", content: [{ type: "text", text: "Count to 5" }] }
+    textmessage("Count to 5")
   ],
   stream: true,
   parallel_tool_calls: false,

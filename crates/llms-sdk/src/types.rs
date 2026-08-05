@@ -2,6 +2,7 @@ use base64::prelude::*;
 use futures_core::Stream;
 use reqwest_retry::Jitter;
 use schemars::{JsonSchema, Schema, schema_for, schema_for_value};
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 #[cfg(feature = "fs")]
 #[cfg(not(target_arch = "wasm32"))]
@@ -395,6 +396,61 @@ pub enum MessagePart {
 pub struct Message {
     pub role: MessageRole,
     pub content: Vec<MessagePart>,
+}
+
+impl Message {
+    /// Build a user message from a text prompt.
+    pub fn from_prompt(prompt: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::User,
+            content: vec![MessagePart::Text(TextPart {
+                text: prompt.into(),
+            })],
+        }
+    }
+
+    /// Build a system message from a text system prompt
+    pub fn from_system(system: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::System,
+            content: vec![MessagePart::Text(TextPart {
+                text: system.into(),
+            })],
+        }
+    }
+
+    /// Build a message, with an optional role (defaults to user), from text content.
+    pub fn from_string(content: impl Into<String>, role: Option<MessageRole>) -> Self {
+        Self {
+            role: role.map_or(MessageRole::User, |r| r),
+            content: vec![MessagePart::Text(TextPart {
+                text: content.into(),
+            })],
+        }
+    }
+
+    /// Parse a message into the `struct` its structured output shape should correspond to.
+    pub fn parse<T: DeserializeOwned>(&self) -> Result<T, Box<dyn std::error::Error>> {
+        let text_parts: Vec<MessagePart> = self
+            .content
+            .iter()
+            .filter(|&f| matches!(f, MessagePart::Text(_)))
+            .cloned()
+            .collect();
+        if text_parts.is_empty() {
+            return Err("No text parts were produced by the LLM, one expected".into());
+        } else if text_parts.len() > 1 {
+            return Err("Multiple text parts were produced by the LLM, only one expected".into());
+        }
+        let text = text_parts
+            .first()
+            .expect("The vector should have length of 1");
+        if let MessagePart::Text(t) = text {
+            let val: T = serde_json::from_str(&t.text)?;
+            return Ok(val);
+        }
+        Err("The parts are not text".into())
+    }
 }
 
 /// Supported LLM API provider.
@@ -1059,5 +1115,58 @@ mod tests {
         let part = DocumentPart::try_from_pdf_file("files/file.pdf".to_string()).unwrap();
         assert_eq!(part.mime_type, Some("application/pdf".to_string()));
         assert!(part.is_base64);
+    }
+
+    #[test]
+    fn test_message_from_prompt() {
+        let message = Message::from_prompt("text");
+        assert_eq!(message.role, MessageRole::User);
+        assert!(matches!(message.content[0], MessagePart::Text(ref t) if t.text == "text"));
+    }
+
+    #[test]
+    fn test_message_from_system() {
+        let message = Message::from_system("text");
+        assert_eq!(message.role, MessageRole::System);
+        assert!(matches!(message.content[0], MessagePart::Text(ref t) if t.text == "text"));
+    }
+
+    #[test]
+    fn test_message_from_string_no_role() {
+        let message = Message::from_string("text", None);
+        assert_eq!(message.role, MessageRole::User);
+        assert!(matches!(message.content[0], MessagePart::Text(ref t) if t.text == "text"));
+    }
+
+    #[test]
+    fn test_message_from_string_w_role() {
+        let message = Message::from_string("text", Some(MessageRole::Assistant));
+        assert_eq!(message.role, MessageRole::Assistant);
+        assert!(matches!(message.content[0], MessagePart::Text(ref t) if t.text == "text"));
+    }
+
+    #[test]
+    fn test_parse_message() {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct ToParse {
+            text: String,
+            number: u64,
+            boolean: bool,
+            float: f32,
+        }
+
+        let text = serde_json::to_string(&ToParse {
+            text: "hello".to_string(),
+            number: 3,
+            boolean: false,
+            float: 0.3,
+        })
+        .expect("Should be able to serialize");
+        let msg = Message::from_string(text, Some(MessageRole::Assistant));
+        let parsed: ToParse = msg.parse().expect("Should parse correctly");
+        assert_eq!(parsed.text, "hello");
+        assert_eq!(parsed.boolean, false);
+        assert_eq!(parsed.float, 0.3);
+        assert_eq!(parsed.number, 3);
     }
 }

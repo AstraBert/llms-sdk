@@ -268,6 +268,9 @@ export interface RetryPolicy {
   base: number
 }
 
+/** Build a text message, with an optional role (defaults to user if left undefined). */
+export declare function textMessage(content: string, role?: MessageRole | undefined | null): Message
+
 /** Plain-text segment of a message. */
 export interface TextPart {
   type: 'text'

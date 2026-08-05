@@ -532,6 +532,19 @@ pub struct Message {
   pub content: Vec<MessagePart>,
 }
 
+/// Build a text message, with an optional role (defaults to user if left undefined).
+#[napi]
+pub fn text_message(content: String, role: Option<MessageRole>) -> Message {
+  let message_role = role.map_or(MessageRole::User, |r| r);
+  Message {
+    role: message_role,
+    content: vec![MessagePart(Either7::A(TextPart {
+      text: content,
+      r#type: "text".to_string(),
+    }))],
+  }
+}
+
 impl From<Message> for NativeMessage {
   fn from(value: Message) -> Self {
     let mut content: Vec<NativeMessagePart> = vec![];

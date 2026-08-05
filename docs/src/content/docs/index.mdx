@@ -48,14 +48,18 @@ A single interface for **OpenAI-compatible chat completions** and the **Anthropi
 <Tabs>
   <TabItem label="Rust">
     ```rust
-    use llms_sdk::{LLM, LLMRequest, Message, MessagePart, MessageRole, TextPart};
+    use llms_sdk::{LLM, LLMRequest, Message};
 
     let request = LLMRequest::builder()
         .api_key(std::env::var("OPENAI_API_KEY")?)
-        .messages(vec![Message {
-            role: MessageRole::User,
-            content: vec![MessagePart::Text(TextPart::new("Hello!"))],
-        }])
+        .messages(vec![
+          Message::from_prompt("Hello!")
+          // This is equivalent to:
+          // Message {
+          //    role: MessageRole::User,
+          //    content: vec![MessagePart::Text(TextPart::new("Hello!"))],
+          // }
+        ])
         .model("gpt-5.4-mini")
         .build();
 
@@ -71,10 +75,14 @@ A single interface for **OpenAI-compatible chat completions** and the **Anthropi
       apiType: ApiType.OpenAI,
       apiKey: process.env.OPENAI_API_KEY!,
       model: 'gpt-5.4-mini',
-      messages: [{
-        role: MessageRole.User,
-        content: [{ text: 'Hello!', type: 'text' }],
-      }],
+      messages: [
+        textMessage("Hello!")
+        // This is equivalent to:
+        // {
+        //  role: MessageRole.User,
+        //  content: [{ text: 'Hello!', type: 'text' }],
+        // }
+      ],
       stream: false,
       parallelToolCalls: false,
     }
@@ -90,12 +98,38 @@ A single interface for **OpenAI-compatible chat completions** and the **Anthropi
     request = LLMRequest(
         model="gpt-5.4-mini",
         api_key="sk-...",
-        messages=[Message("user", [TextPart("Hello, world!")])],
+        messages=[
+          Message.from_prompt("Hello!"),
+          # This is equivalent to:
+          # Message("user", [TextPart("Hello, world!")])
+        ],
         stream=False,
     )
 
     client = llm.LLM()
     response = await client.respond(request)
     ```
+  </TabItem>
+  <TabItem label="WASM">
+      ```javascript
+      import init, { chat } from "@cle-does-things/llms-sdk-wasm";
+      
+      await init();
+      
+      const response = await chat({
+        api_type: "openai",
+        api_key: "sk-...",
+        model: "gpt-5.4-mini",
+        messages: [
+          textmessage("Hello!")
+          // This is equivalent to:
+          // { role: "user", content: [{ type: "text", text: "Hello!" }] }
+        ],
+        stream: false,
+        parallel_tool_calls: false,
+      });
+      
+      console.log(response.message.content);
+      ```
   </TabItem>
 </Tabs>
