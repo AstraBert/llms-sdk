@@ -1,3 +1,5 @@
+
+
 # llms-sdk
 
 A unified Rust SDK for calling LLM APIs. It currently supports **OpenAI-compatible chat completions** and the **Anthropic Messages API** through a single request/response model.
@@ -25,14 +27,14 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-llms-sdk = "0.2"
+llms-sdk = "0.3"
 ```
 
 Enable optional features as needed:
 
 ```toml
 [dependencies]
-llms-sdk = { version = "0.2", features = ["cli"] }
+llms-sdk = { version = "0.3", features = ["cli"] }
 ```
 
 ### TypeScript / Node.js
