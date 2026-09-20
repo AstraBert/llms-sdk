@@ -64,10 +64,15 @@ impl LLM {
   ///
   /// @param retryPolicy - Optional retry policy. Defaults to 3 retries with
   ///   exponential backoff between 500 ms and 3000 ms.
+  /// @param supportDeveloper - Whether or not OpenAI-based clients support 'developer'
+  /// as a role. Defaults to true.
   #[napi(constructor)]
-  pub fn new(retry_policy: Option<RetryPolicy>) -> Self {
+  pub fn new(retry_policy: Option<RetryPolicy>, support_developer: Option<bool>) -> Self {
     Self {
-      inner: NativeLLM::new(NativeRetryPolicy::from(retry_policy.unwrap_or_default())),
+      inner: NativeLLM::new(
+        NativeRetryPolicy::from(retry_policy.unwrap_or_default()),
+        support_developer.unwrap_or(true),
+      ),
     }
   }
 

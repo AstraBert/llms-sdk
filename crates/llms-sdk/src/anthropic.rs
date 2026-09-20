@@ -663,19 +663,23 @@ impl TryFrom<LLMRequest> for AntRequest {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct AntUsage {
-    pub input_tokens: u32,
-    pub cache_creation_input_tokens: u32,
-    pub cache_read_input_tokens: u32,
-    pub output_tokens: u32,
+    #[serde(default)]
+    pub input_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u32>,
+    #[serde(default)]
+    pub output_tokens: Option<u32>,
 }
 
 impl From<AntUsage> for LLMUsage {
     fn from(value: AntUsage) -> Self {
         Self {
-            input_tokens: value.input_tokens,
-            cache_read_tokens: Some(value.cache_read_input_tokens),
-            cache_write_tokens: Some(value.cache_creation_input_tokens),
-            output_tokens: value.output_tokens,
+            input_tokens: value.input_tokens.unwrap_or_default(),
+            cache_read_tokens: value.cache_read_input_tokens,
+            cache_write_tokens: value.cache_creation_input_tokens,
+            output_tokens: value.output_tokens.unwrap_or_default(),
             other_tokens: None,
         }
     }
@@ -1414,10 +1418,10 @@ mod tests {
     #[test]
     fn ant_usage_conversion_maps_cache_tokens() {
         let usage = AntUsage {
-            input_tokens: 10,
-            cache_creation_input_tokens: 3,
-            cache_read_input_tokens: 2,
-            output_tokens: 5,
+            input_tokens: Some(10),
+            cache_creation_input_tokens: Some(3),
+            cache_read_input_tokens: Some(2),
+            output_tokens: Some(5),
         };
         let llm_usage = LLMUsage::from(usage);
         assert_eq!(llm_usage.input_tokens, 10);
@@ -1637,10 +1641,10 @@ mod tests {
                 text: "hello".to_string(),
             })],
             usage: AntUsage {
-                input_tokens: 2,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
-                output_tokens: 1,
+                input_tokens: Some(2),
+                cache_creation_input_tokens: Some(0),
+                cache_read_input_tokens: Some(0),
+                output_tokens: Some(1),
             },
         };
         let llm_response = LLMResponse::from(response);

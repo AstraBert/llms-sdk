@@ -49,7 +49,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         parallel_tool_calls: false,
     };
 
-    let llm = LLM::new(RetryPolicy::default());
+    // `true` specifies that OpenAI-like clients
+    //  support 'developer' as a role instead of
+    //  'system'. Use `false` to switch to 'system'
+    let llm = LLM::new(RetryPolicy::default(), true);
     let response = llm.respond(request).await?;
     println!("{:?}", response);
     Ok(())

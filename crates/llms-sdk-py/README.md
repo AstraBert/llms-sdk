@@ -21,7 +21,7 @@ import llms_sdk_py as llm
 
 async def main():
     request = llm.LLMRequest(
-        model="gpt-4o",
+        model="gpt-5.4-mini",
         api_key="sk-...",
         messages=[
             llm.Message("user", [llm.TextPart("Hello, world!")])
@@ -48,7 +48,7 @@ import llms_sdk_py as llm
 
 async def main():
     request = llm.LLMRequest(
-        model="gpt-4o",
+        model="gpt-5.4-mini",
         api_key="sk-...",
         messages=[llm.Message("user", [llm.TextPart("Count to 5")])],
         stream=True,
