@@ -25,14 +25,14 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-llms-sdk = "0.2"
+llms-sdk = "0.3"
 ```
 
 Enable optional features as needed:
 
 ```toml
 [dependencies]
-llms-sdk = { version = "0.2", features = ["cli"] }
+llms-sdk = { version = "0.3", features = ["cli"] }
 ```
 
 ### TypeScript / Node.js

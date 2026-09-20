@@ -106,7 +106,7 @@ A single interface for **OpenAI-compatible chat completions** and the **Anthropi
         stream=False,
     )
 
-    client = llm.LLM()
+    client = LLM()
     response = await client.respond(request)
     ```
   </TabItem>
@@ -127,7 +127,7 @@ A single interface for **OpenAI-compatible chat completions** and the **Anthropi
         ],
         stream: false,
         parallel_tool_calls: false,
-      });
+      }, true);
       
       console.log(response.message.content);
       ```

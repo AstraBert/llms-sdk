@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4"
-llms-sdk = { path = "../llms-sdk", version = "0.3.0", default-features = false }
+llms-sdk = { path = "../llms-sdk", version = "0.3", default-features = false }
 tsify-next = { version = "0.5", default-features = false, features = ["js"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_bytes = "0.11"

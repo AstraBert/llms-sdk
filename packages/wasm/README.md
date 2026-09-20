@@ -46,6 +46,7 @@ Sends a single non-streaming chat request and returns the full response.
 
 **Parameters:**
 - `request: LLMRequest` — the chat request (see [LLMRequest](#llmrequest))
+- `support_developer: boolean` — Whether or not the OpenAI-like clients support `developer` as a role instead of `system`.
 
 **Returns:** `Promise<LLMResponse>`
 
@@ -78,6 +79,7 @@ Streams a chat response, invoking the callback for each chunk.
 
 **Parameters:**
 - `request: LLMRequest` — the chat request
+- `support_developer: boolean` — Whether or not the OpenAI-like clients support `developer` as a role instead of `system`.
 - `callback: (error: any, chunk: LLMStreamingResponse) => void` — called on every stream event
 
 **Returns:** `Promise<void>`

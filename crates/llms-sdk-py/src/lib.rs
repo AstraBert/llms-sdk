@@ -13,7 +13,7 @@ use pyo3_stub_gen::define_stub_info_gatherer;
 ///     import llms_sdk_py as llm
 ///
 ///     req = llm.LLMRequest(
-///         model="gpt-4o",
+///         model="gpt-5.6-terra",
 ///         api_key="sk-...",
 ///         messages=[llm.Message("user", [llm.TextPart("Hello!")])],
 ///         stream=False,
@@ -2737,10 +2737,10 @@ mod llms_sdk_py {
         /// Args:
         ///     retry_policy: Optional :py:class:`RetryPolicy` for failed requests.
         #[new]
-        #[pyo3(signature = (retry_policy = None))]
-        fn new(retry_policy: Option<RetryPolicy>) -> Self {
+        #[pyo3(signature = (retry_policy = None, support_developer = true))]
+        fn new(retry_policy: Option<RetryPolicy>, support_developer: bool) -> Self {
             Self {
-                inner: NativeLLM::new(retry_policy.unwrap_or_default().into()),
+                inner: NativeLLM::new(retry_policy.unwrap_or_default().into(), support_developer),
             }
         }
 

@@ -13,8 +13,10 @@ export declare class Llm {
    *
    * @param retryPolicy - Optional retry policy. Defaults to 3 retries with
    *   exponential backoff between 500 ms and 3000 ms.
+   * @param supportDeveloper - Whether or not OpenAI-based clients support 'developer'
+   * as a role. Defaults to true.
    */
-  constructor(retryPolicy?: RetryPolicy | undefined | null)
+  constructor(retryPolicy?: RetryPolicy | undefined | null, supportDeveloper?: boolean | undefined | null)
   /**
    * Send a single request and wait for the full response.
    *
