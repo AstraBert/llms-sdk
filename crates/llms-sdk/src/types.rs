@@ -422,7 +422,7 @@ impl Message {
     /// Build a message, with an optional role (defaults to user), from text content.
     pub fn from_string(content: impl Into<String>, role: Option<MessageRole>) -> Self {
         Self {
-            role: role.map_or(MessageRole::User, |r| r),
+            role: role.unwrap_or(MessageRole::User),
             content: vec![MessagePart::Text(TextPart {
                 text: content.into(),
             })],

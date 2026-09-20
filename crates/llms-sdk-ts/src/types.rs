@@ -535,7 +535,7 @@ pub struct Message {
 /// Build a text message, with an optional role (defaults to user if left undefined).
 #[napi]
 pub fn text_message(content: String, role: Option<MessageRole>) -> Message {
-  let message_role = role.map_or(MessageRole::User, |r| r);
+  let message_role = role.unwrap_or(MessageRole::User);
   Message {
     role: message_role,
     content: vec![MessagePart(Either7::A(TextPart {
