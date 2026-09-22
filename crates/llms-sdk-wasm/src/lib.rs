@@ -5,7 +5,7 @@ pub use types::*;
 use futures::channel::oneshot;
 use futures_util::StreamExt;
 use js_sys::Function;
-use llms_sdk::{LLM, RetryPolicy};
+use llms_sdk::LLM;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -16,8 +16,8 @@ pub fn __wasm_start() {
 
 /// Send a single-turn (non-streaming) chat request and return the full response.
 #[wasm_bindgen]
-pub async fn chat(request: LLMRequest, support_developer: bool) -> Result<LLMResponse, JsError> {
-    let llm = LLM::new(RetryPolicy::default(), support_developer);
+pub async fn chat(request: LLMRequest) -> Result<LLMResponse, JsError> {
+    let llm = LLM::default();
     let response = llm
         .respond(request.try_into()?)
         .await
@@ -31,12 +31,8 @@ pub async fn chat(request: LLMRequest, support_developer: bool) -> Result<LLMRes
 /// - `error` – `null` on success or a string message on failure.
 /// - `chunk` – an [`LLMStreamingResponse`] variant on success, or `undefined` on failure.
 #[wasm_bindgen(js_name = streamChat)]
-pub async fn stream_chat(
-    request: LLMRequest,
-    support_developer: bool,
-    callback: Function,
-) -> Result<(), JsError> {
-    let llm = LLM::new(RetryPolicy::default(), support_developer);
+pub async fn stream_chat(request: LLMRequest, callback: Function) -> Result<(), JsError> {
+    let llm = LLM::default();
     let mut stream = llm
         .stream_response(request.try_into()?)
         .await

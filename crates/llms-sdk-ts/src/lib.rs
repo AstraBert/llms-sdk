@@ -67,12 +67,9 @@ impl LLM {
   /// @param supportDeveloper - Whether or not OpenAI-based clients support 'developer'
   /// as a role. Defaults to true.
   #[napi(constructor)]
-  pub fn new(retry_policy: Option<RetryPolicy>, support_developer: Option<bool>) -> Self {
+  pub fn new(retry_policy: Option<RetryPolicy>) -> Self {
     Self {
-      inner: NativeLLM::new(
-        NativeRetryPolicy::from(retry_policy.unwrap_or_default()),
-        support_developer.unwrap_or(true),
-      ),
+      inner: NativeLLM::new(NativeRetryPolicy::from(retry_policy.unwrap_or_default())),
     }
   }
 

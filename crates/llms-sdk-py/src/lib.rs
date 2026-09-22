@@ -2737,10 +2737,10 @@ mod llms_sdk_py {
         /// Args:
         ///     retry_policy: Optional :py:class:`RetryPolicy` for failed requests.
         #[new]
-        #[pyo3(signature = (retry_policy = None, support_developer = true))]
-        fn new(retry_policy: Option<RetryPolicy>, support_developer: bool) -> Self {
+        #[pyo3(signature = (retry_policy = None))]
+        fn new(retry_policy: Option<RetryPolicy>) -> Self {
             Self {
-                inner: NativeLLM::new(retry_policy.unwrap_or_default().into(), support_developer),
+                inner: NativeLLM::new(retry_policy.unwrap_or_default().into()),
             }
         }
 

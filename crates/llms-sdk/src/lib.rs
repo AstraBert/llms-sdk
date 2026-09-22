@@ -30,31 +30,16 @@ pub fn install_crypto_provider() {
 use crate::{anthropic::AntClient, openai::OpenAIClient};
 
 /// Unified entry point for sending requests to OpenAI or Anthropic-compatible APIs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct LLM {
     /// Retry policy applied to all API requests made through this client.
     pub retry_policy: RetryPolicy,
-    /// Whether OpenAI-based clients support the 'developer' role
-    /// or not
-    pub support_developer: bool,
-}
-
-impl Default for LLM {
-    fn default() -> Self {
-        Self {
-            retry_policy: RetryPolicy::default(),
-            support_developer: true,
-        }
-    }
 }
 
 impl LLM {
     /// Creates a new [`LLM`] client with the provided retry policy.
-    pub fn new(retry_policy: RetryPolicy, support_developer: bool) -> Self {
-        Self {
-            retry_policy,
-            support_developer,
-        }
+    pub fn new(retry_policy: RetryPolicy) -> Self {
+        Self { retry_policy }
     }
 
     /// Sends a single completion request and returns the full response.
@@ -66,7 +51,7 @@ impl LLM {
         let api_type = request.api_type;
         match api_type {
             ApiType::OpenAI => {
-                let openai_client = OpenAIClient::new(self.retry_policy, self.support_developer);
+                let openai_client = OpenAIClient::new(self.retry_policy);
                 let response = openai_client.respond(request).await?;
                 Ok(response)
             }
@@ -87,7 +72,7 @@ impl LLM {
         let api_type = request.api_type;
         match api_type {
             ApiType::OpenAI => {
-                let openai_client = OpenAIClient::new(self.retry_policy, self.support_developer);
+                let openai_client = OpenAIClient::new(self.retry_policy);
                 let stream = openai_client.stream_response(request).await?;
                 Ok(stream)
             }
