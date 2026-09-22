@@ -8,7 +8,7 @@ use reqwest_middleware::ClientBuilder;
 #[cfg(not(target_arch = "wasm32"))]
 use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use schemars::Schema;
-use serde::{Deserialize, Serialize, ser::SerializeStruct};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     ApiType, AudioPart, CHAT_COMPLETIONS_ENDPOINT, ImagePart, LLMRequest, LLMResponse, LLMStream,
@@ -24,15 +24,12 @@ use crate::{
 pub struct OpenAIClient {
     /// Retry policy applied to API requests made by this client.
     pub retry_policy: RetryPolicy,
-    /// Whether the 'developer' role should be used
-    /// rather than the 'system' role
-    pub supports_developer: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum OpenAIMessageRole {
-    Developer,
+    System,
     User,
     Assistant,
     Tool,
@@ -42,7 +39,7 @@ impl From<MessageRole> for OpenAIMessageRole {
     fn from(value: MessageRole) -> Self {
         match value {
             MessageRole::Assistant => Self::Assistant,
-            MessageRole::System => Self::Developer,
+            MessageRole::System => Self::System,
             MessageRole::Tool => Self::Tool,
             MessageRole::User => Self::User,
         }
@@ -192,28 +189,10 @@ impl TryFrom<MessagePart> for OpenAIMessagePart {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAISimpleMessage {
     pub role: OpenAIMessageRole,
     pub content: Vec<OpenAIMessagePart>,
-    #[serde(skip)]
-    supports_developer: bool,
-}
-
-impl Serialize for OpenAISimpleMessage {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("OpenAISimpleMessage", 2)?;
-        if !self.supports_developer && self.role == OpenAIMessageRole::Developer {
-            state.serialize_field("role", "system")?;
-        } else {
-            state.serialize_field("role", &self.role)?;
-        }
-        state.serialize_field("content", &self.content)?;
-        state.end()
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -234,16 +213,13 @@ pub struct OpenAIToolResultMessage {
 #[serde(untagged)]
 pub enum OpenAIMessage {
     User(OpenAISimpleMessage),
-    Developer(OpenAISimpleMessage),
+    System(OpenAISimpleMessage),
     Assistant(OpenAIAssistantMessage),
     Tool(OpenAIToolResultMessage),
 }
 
 impl OpenAIMessage {
-    fn try_from_message(
-        value: Message,
-        supports_developer: bool,
-    ) -> Result<Self, UnsupportedPartType> {
+    fn try_from_message(value: Message) -> Result<Self, UnsupportedPartType> {
         match value.role {
             MessageRole::User => {
                 let mut content = vec![];
@@ -263,7 +239,6 @@ impl OpenAIMessage {
                 Ok(Self::User(OpenAISimpleMessage {
                     role: OpenAIMessageRole::User,
                     content,
-                    supports_developer,
                 }))
             }
             MessageRole::System => {
@@ -281,10 +256,9 @@ impl OpenAIMessage {
                         _ => content.push(part),
                     }
                 }
-                Ok(Self::Developer(OpenAISimpleMessage {
-                    role: OpenAIMessageRole::Developer,
+                Ok(Self::System(OpenAISimpleMessage {
+                    role: OpenAIMessageRole::System,
                     content,
-                    supports_developer,
                 }))
             }
             MessageRole::Assistant => {
@@ -427,7 +401,7 @@ impl From<OpenAIMessage> for Message {
                     content,
                 }
             }
-            OpenAIMessage::Developer(d) => {
+            OpenAIMessage::System(d) => {
                 let mut content = vec![];
                 for c in d.content {
                     match c {
@@ -567,13 +541,10 @@ pub struct OpenAIRequest {
 }
 
 impl OpenAIRequest {
-    fn try_from_request(
-        value: LLMRequest,
-        supports_developer: bool,
-    ) -> Result<Self, UnsupportedPartType> {
+    fn try_from_request(value: LLMRequest) -> Result<Self, UnsupportedPartType> {
         let mut messages = vec![];
         for m in value.messages {
-            messages.push(OpenAIMessage::try_from_message(m, supports_developer)?);
+            messages.push(OpenAIMessage::try_from_message(m)?);
         }
         let stream_options = if value.stream {
             Some(OpenAIStreamOptions {
@@ -821,11 +792,8 @@ fn deltas_to_message(deltas: &[LLMStreamingDelta], tool_calls: Option<&[ToolCall
 }
 
 impl OpenAIClient {
-    pub fn new(retry_policy: RetryPolicy, supports_developer: bool) -> Self {
-        Self {
-            retry_policy,
-            supports_developer,
-        }
+    pub fn new(retry_policy: RetryPolicy) -> Self {
+        Self { retry_policy }
     }
 
     pub async fn respond(
@@ -840,7 +808,7 @@ impl OpenAIClient {
             }
             .into());
         }
-        let req = OpenAIRequest::try_from_request(request, self.supports_developer)?;
+        let req = OpenAIRequest::try_from_request(request)?;
         #[cfg(not(target_arch = "wasm32"))]
         let client = {
             let retry = ExponentialBackoff::builder()
@@ -891,7 +859,7 @@ impl OpenAIClient {
             }
             .into());
         }
-        let req = OpenAIRequest::try_from_request(request, self.supports_developer)?;
+        let req = OpenAIRequest::try_from_request(request)?;
         #[cfg(not(target_arch = "wasm32"))]
         let client = {
             let retry = ExponentialBackoff::builder()
@@ -1032,21 +1000,21 @@ mod tests {
     #[test]
     fn openai_message_user_role_maps_to_user() {
         let msg = text_message(MessageRole::User, "hello");
-        let openai = OpenAIMessage::try_from_message(msg, true).unwrap();
+        let openai = OpenAIMessage::try_from_message(msg).unwrap();
         assert!(matches!(openai, OpenAIMessage::User(_)));
     }
 
     #[test]
-    fn openai_message_system_role_maps_to_developer() {
+    fn openai_message_system_role_maps_to_system() {
         let msg = text_message(MessageRole::System, "sys");
-        let openai = OpenAIMessage::try_from_message(msg, true).unwrap();
-        assert!(matches!(openai, OpenAIMessage::Developer(_)));
+        let openai = OpenAIMessage::try_from_message(msg).unwrap();
+        assert!(matches!(openai, OpenAIMessage::System(_)));
     }
 
     #[test]
     fn openai_message_roundtrip_preserves_text() {
         let original = text_message(MessageRole::User, "roundtrip");
-        let openai = OpenAIMessage::try_from_message(original.clone(), true).unwrap();
+        let openai = OpenAIMessage::try_from_message(original.clone()).unwrap();
         let back: Message = openai.into();
         assert_eq!(back.role, MessageRole::User);
         assert_eq!(back.content.len(), 1);
@@ -1062,7 +1030,7 @@ mod tests {
             role: MessageRole::Assistant,
             content: vec![MessagePart::Thinking(ThinkingPart::new("thinking"))],
         };
-        let result = OpenAIMessage::try_from_message(msg, true);
+        let result = OpenAIMessage::try_from_message(msg);
         assert!(result.is_err());
     }
 
@@ -1121,7 +1089,6 @@ mod tests {
                     url: "data:image/png;base64,abc".to_string(),
                 },
             })],
-            supports_developer: true,
         });
         let msg: Message = openai.into();
         assert!(matches!(
@@ -1141,7 +1108,6 @@ mod tests {
                     url: "https://example.com/img.png".to_string(),
                 },
             })],
-            supports_developer: true,
         });
         let msg: Message = openai.into();
         assert!(matches!(
@@ -1162,7 +1128,6 @@ mod tests {
                     format: "mp3".to_string(),
                 },
             })],
-            supports_developer: true,
         });
         let msg: Message = openai.into();
         assert!(matches!(
@@ -1199,14 +1164,13 @@ mod tests {
     }
 
     #[test]
-    fn openai_message_into_message_developer_keeps_system_role() {
-        let openai = OpenAIMessage::Developer(OpenAISimpleMessage {
-            role: OpenAIMessageRole::Developer,
+    fn openai_message_into_message_system_keeps_system_role() {
+        let openai = OpenAIMessage::System(OpenAISimpleMessage {
+            role: OpenAIMessageRole::System,
             content: vec![OpenAIMessagePart::Text(OpenAITextPart {
                 part_type: "text".to_string(),
                 text: "sys".to_string(),
             })],
-            supports_developer: true,
         });
         let msg: Message = openai.into();
         assert_eq!(msg.role, MessageRole::System);
@@ -1247,7 +1211,7 @@ mod tests {
             tool_choice: None,
             parallel_tool_calls: false,
         };
-        let openai_req = OpenAIRequest::try_from_request(request, true).unwrap();
+        let openai_req = OpenAIRequest::try_from_request(request).unwrap();
         assert!(openai_req.tools.is_none());
         assert!(openai_req.parallel_tool_calls.is_none());
     }
@@ -1272,7 +1236,7 @@ mod tests {
             parallel_tool_calls: false,
         };
         request.stream = true;
-        let openai_req = OpenAIRequest::try_from_request(request, true).unwrap();
+        let openai_req = OpenAIRequest::try_from_request(request).unwrap();
         assert!(openai_req.stream_options.is_some());
         assert!(openai_req.stream_options.unwrap().include_usage);
     }
@@ -1508,7 +1472,7 @@ mod tests {
             parallel_tool_calls: false,
         };
 
-        let mut stream = OpenAIClient::new(RetryPolicy::default(), true)
+        let mut stream = OpenAIClient::new(RetryPolicy::default())
             .stream_response(request)
             .await
             .unwrap();
@@ -1518,39 +1482,5 @@ mod tests {
         ));
         assert!(stream.next().await.unwrap().is_err());
         server.join().unwrap();
-    }
-
-    #[test]
-    fn test_openai_simple_message_custom_serialization_no_dev() {
-        let no_developer = OpenAISimpleMessage {
-            role: OpenAIMessageRole::Developer,
-            content: vec![OpenAIMessagePart::Text(OpenAITextPart {
-                part_type: "text".to_string(),
-                text: "hello".to_string(),
-            })],
-            supports_developer: false,
-        };
-
-        let to_str = serde_json::to_string(&no_developer).expect("Should serialize");
-        let val: serde_json::Value =
-            serde_json::from_str(&to_str).expect("Should deserialize without problems");
-        assert_eq!(val["role"].as_str(), Some("system"));
-    }
-
-    #[test]
-    fn test_openai_simple_message_custom_serialization_w_dev() {
-        let no_developer = OpenAISimpleMessage {
-            role: OpenAIMessageRole::Developer,
-            content: vec![OpenAIMessagePart::Text(OpenAITextPart {
-                part_type: "text".to_string(),
-                text: "hello".to_string(),
-            })],
-            supports_developer: true,
-        };
-
-        let to_str = serde_json::to_string(&no_developer).expect("Should serialize");
-        let val: serde_json::Value =
-            serde_json::from_str(&to_str).expect("Should deserialize without problems");
-        assert_eq!(val["role"].as_str(), Some("developer"));
     }
 }

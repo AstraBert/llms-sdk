@@ -72,8 +72,19 @@ async fn openai_text() {
     if !should_run() || openai_key().is_none() {
         return;
     }
-    let req = openai_request("gpt-5.4-mini", vec![text_msg("Say 'hello world' exactly.")]);
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let req = openai_request(
+        "gpt-5.4-mini",
+        vec![
+            Message {
+                role: MessageRole::System,
+                content: vec![MessagePart::Text(TextPart {
+                    text: "You are a helpful assistant".to_string(),
+                })],
+            },
+            text_msg("Say 'hello world' exactly."),
+        ],
+    );
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     assert!(!resp.message.content.is_empty());
 }
@@ -93,8 +104,19 @@ async fn openai_image() {
             MessagePart::Image(image),
         ],
     };
-    let req = openai_request("gpt-5.4-mini", vec![msg]);
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let req = openai_request(
+        "gpt-5.4-mini",
+        vec![
+            Message {
+                role: MessageRole::System,
+                content: vec![MessagePart::Text(TextPart {
+                    text: "You are a helpful assistant".to_string(),
+                })],
+            },
+            msg,
+        ],
+    );
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     assert!(!resp.message.content.is_empty());
 }
@@ -114,8 +136,19 @@ async fn openai_audio() {
             MessagePart::Audio(audio),
         ],
     };
-    let req = openai_request("gpt-audio-1.5", vec![msg]);
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let req = openai_request(
+        "gpt-audio-1.5",
+        vec![
+            Message {
+                role: MessageRole::System,
+                content: vec![MessagePart::Text(TextPart {
+                    text: "You are a helpful assistant".to_string(),
+                })],
+            },
+            msg,
+        ],
+    );
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     assert!(!resp.message.content.is_empty());
 }
@@ -140,10 +173,18 @@ async fn openai_structured_output() {
         }),
         ..openai_request(
             "gpt-5.4-mini",
-            vec![text_msg("What is the capital of France?")],
+            vec![
+                Message {
+                    role: MessageRole::System,
+                    content: vec![MessagePart::Text(TextPart {
+                        text: "You are a helpful assistant".to_string(),
+                    })],
+                },
+                text_msg("What is the capital of France?"),
+            ],
         )
     };
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     let text = match resp.message.content.first() {
         Some(MessagePart::Text(t)) => t.text.clone(),
@@ -173,12 +214,18 @@ async fn openai_tool_use() {
         tools: Some(vec![tool]),
         ..openai_request(
             "gpt-5.4-mini",
-            vec![text_msg(
-                "Call the get_weather tool to tell me what is the weather in Paris",
-            )],
+            vec![
+                Message {
+                    role: MessageRole::System,
+                    content: vec![MessagePart::Text(TextPart {
+                        text: "You are a helpful assistant".to_string(),
+                    })],
+                },
+                text_msg("Call the get_weather tool to tell me what is the weather in Paris"),
+            ],
         )
     };
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     let has_tool = resp
         .message
@@ -198,7 +245,7 @@ async fn openai_streaming_text() {
         stream: true,
         ..openai_request("gpt-5.4-mini", vec![text_msg("Count to three.")])
     };
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let llm = LLM::new(RetryPolicy::default());
     let mut stream = llm.stream_response(req).await.unwrap();
     let mut saw_delta = false;
     let mut complete = None;
@@ -223,7 +270,7 @@ async fn anthropic_text() {
         "claude-sonnet-5",
         vec![text_msg("Say 'hello world' exactly.")],
     );
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     assert!(!resp.message.content.is_empty());
 }
@@ -244,7 +291,7 @@ async fn anthropic_image() {
         ],
     };
     let req = anthropic_request("claude-sonnet-5", vec![msg]);
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     assert!(!resp.message.content.is_empty());
 }
@@ -265,7 +312,7 @@ async fn anthropic_document() {
         ],
     };
     let req = anthropic_request("claude-sonnet-5", vec![msg]);
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     assert!(!resp.message.content.is_empty());
 }
@@ -287,7 +334,7 @@ async fn anthropic_structured_output() {
             vec![text_msg("What is the capital of France?")],
         )
     };
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     let text = match resp.message.content.first() {
         Some(MessagePart::Text(t)) => t.text.clone(),
@@ -318,7 +365,7 @@ async fn anthropic_tool_use() {
             )],
         )
     };
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let llm = LLM::new(RetryPolicy::default());
     let resp = llm.respond(req).await.unwrap();
     let has_tool = resp
         .message
@@ -338,7 +385,7 @@ async fn anthropic_streaming_text() {
         stream: true,
         ..anthropic_request("claude-sonnet-5", vec![text_msg("Count to three.")])
     };
-    let llm = LLM::new(RetryPolicy::default(), true);
+    let llm = LLM::new(RetryPolicy::default());
     let mut stream = llm.stream_response(req).await.unwrap();
     let mut saw_delta = false;
     let mut complete = None;
